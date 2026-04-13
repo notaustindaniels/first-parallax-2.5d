@@ -1,0 +1,22 @@
+{
+  "name": "parallax-2-5d",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "npx remotion studio",
+    "render": "npx remotion render ParallaxZoom out/parallax.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.448",
+    "@remotion/light-leaks": "4.0.448",
+    "@remotion/media": "4.0.448",
+    "@remotion/transitions": "4.0.448",
+    "react": "^19",
+    "react-dom": "^19",
+    "remotion": "4.0.448"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "typescript": "^5"
+  }
+}

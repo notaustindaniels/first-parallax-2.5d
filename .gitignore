@@ -1,0 +1,18 @@
+node_modules/
+
+# Rendered output
+out/
+
+# Voiceover audio (generated — not committed)
+public/voiceover/*.mp3
+public/voiceover/*.wav
+
+# Environment / secrets
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# Remotion cache
+.remotion/
