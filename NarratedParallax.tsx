@@ -1,11 +1,25 @@
 /** NarratedParallax — 8-scene 2.5D parallax composition
  *  calculateMetadata measures voiceover audio to set scene durations dynamically.
- *  Falls back to 135 frames (~4.5 s) per scene when audio is not yet generated.
+ *  Falls back to 135 frames per scene when audio is absent.
+ *
+ *  Audio is hoisted out of Scene components into this file so that crossfade
+ *  transitions don't cause overlapping narration. Each scene's <Audio> is
+ *  wrapped in a <Sequence> with a calculated offset that accounts for the
+ *  transition overlap subtraction.
  */
 import React from "react";
-import { AbsoluteFill, staticFile, useCurrentFrame } from "remotion";
+import {
+  AbsoluteFill,
+  Sequence,
+  staticFile,
+  useCurrentFrame,
+  useVideoConfig,
+  interpolate,
+} from "remotion";
+import { Audio } from "@remotion/media";
 import { TransitionSeries, linearTiming } from "@remotion/transitions";
 import { fade } from "@remotion/transitions/fade";
+import { slide } from "@remotion/transitions/slide";
 import { LightLeak } from "@remotion/light-leaks";
 
 import { getAudioDuration } from "./getAudioDuration";
@@ -20,18 +34,25 @@ import { Scene8 } from "./scenes/Scene8";
 
 // ── Types ─────────────────────────────────────────────────────
 
-// Must include index signature to satisfy Remotion's Record<string, unknown> constraint
 export type NarratedParallaxProps = {
   sceneDurations: number[];
+  [key: string]: unknown;
+};
+
+export type SceneDebugProps = {
+  sceneIndex: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
   [key: string]: unknown;
 };
 
 // ── Constants ─────────────────────────────────────────────────
 
 const FPS = 30;
-const FALLBACK_FRAMES = 135; // 4.5 s per scene when no audio
-const FADE_FRAMES = 20;      // overlap for each fade transition
-const NUM_FADES = 5;         // transitions between scenes 1-2, 2-3, 3-4, 5-6, 6-7
+const FALLBACK_FRAMES = 135;
+
+// Transition subtract-frames before each scene i (0-indexed). Overlays don't subtract.
+// Cuts:  1→2 fade 12 · 2→3 slide 10 · 3→4 fade 12 · 4→5 overlay · 5→6 fade 12 · 6→7 slide 10 · 7→8 overlay
+const TRANSITION_BEFORE: readonly number[] = [0, 12, 10, 12, 0, 12, 10, 0];
+const TRANSITION_OVERLAP_TOTAL = TRANSITION_BEFORE.reduce((a, b) => a + b, 0); // 56
 
 // ── calculateMetadata ─────────────────────────────────────────
 
@@ -48,7 +69,7 @@ export const calculateMetadata = async () => {
     }),
   );
 
-  const total = durations.reduce((a, b) => a + b, 0) - NUM_FADES * FADE_FRAMES;
+  const total = durations.reduce((a, b) => a + b, 0) - TRANSITION_OVERLAP_TOTAL;
 
   return {
     durationInFrames: Math.max(total, 60),
@@ -56,112 +77,153 @@ export const calculateMetadata = async () => {
   };
 };
 
+// ── Helpers ───────────────────────────────────────────────────
+
+const buildAudioStarts = (sceneDurations: number[]): number[] => {
+  const starts: number[] = [];
+  let cursor = 0;
+  for (let i = 0; i < 8; i++) {
+    cursor -= TRANSITION_BEFORE[i];
+    starts.push(cursor);
+    cursor += sceneDurations[i];
+  }
+  return starts;
+};
+
+const grainDataUrl = (seed: number) => {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' seed='${seed}'/><feColorMatrix type='saturate' values='0'/></filter><rect width='256' height='256' filter='url(#g)'/></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+};
+
 // ── Main component ────────────────────────────────────────────
 
 export const NarratedParallax: React.FC<NarratedParallaxProps> = ({ sceneDurations }) => {
   const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
   const [s1, s2, s3, s4, s5, s6, s7, s8] = sceneDurations;
-
-  // Film grain — seed cycles every 2 frames for a natural flutter
-  const seed = Math.floor(frame / 2) % 12;
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' seed='${seed}'/><feColorMatrix type='saturate' values='0'/></filter><rect width='256' height='256' filter='url(#g)'/></svg>`;
-  const grainUrl = `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+  const audioStarts = buildAudioStarts(sceneDurations);
+  const grainUrl = grainDataUrl(Math.floor(frame / 2) % 12);
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-
-      {/* ── 8 scenes wired with TransitionSeries ── */}
+      {/* ── Visual: 8 scenes wired with TransitionSeries ── */}
       <TransitionSeries>
-
-        {/* Scene 1 — Starfield Mountains */}
         <TransitionSeries.Sequence durationInFrames={s1}>
           <Scene1 durationInFrames={s1} />
         </TransitionSeries.Sequence>
 
         <TransitionSeries.Transition
           presentation={fade()}
-          timing={linearTiming({ durationInFrames: FADE_FRAMES })}
+          timing={linearTiming({ durationInFrames: 12 })}
         />
 
-        {/* Scene 2 — River Canyon */}
         <TransitionSeries.Sequence durationInFrames={s2}>
           <Scene2 durationInFrames={s2} />
         </TransitionSeries.Sequence>
 
         <TransitionSeries.Transition
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: FADE_FRAMES })}
+          presentation={slide({ direction: "from-right" })}
+          timing={linearTiming({ durationInFrames: 10 })}
         />
 
-        {/* Scene 3 — Lantern Alley */}
         <TransitionSeries.Sequence durationInFrames={s3}>
           <Scene3 durationInFrames={s3} />
         </TransitionSeries.Sequence>
 
         <TransitionSeries.Transition
           presentation={fade()}
-          timing={linearTiming({ durationInFrames: FADE_FRAMES })}
+          timing={linearTiming({ durationInFrames: 12 })}
         />
 
-        {/* Scene 4 — City Skyline (reverse zoom) */}
         <TransitionSeries.Sequence durationInFrames={s4}>
           <Scene4 durationInFrames={s4} />
         </TransitionSeries.Sequence>
 
-        {/* LightLeak bridge: centered on the S4/S5 cut */}
-        <TransitionSeries.Overlay durationInFrames={30}>
+        <TransitionSeries.Overlay durationInFrames={25}>
           <LightLeak seed={3} hueShift={30} />
         </TransitionSeries.Overlay>
 
-        {/* Scene 5 — Forest Floor */}
         <TransitionSeries.Sequence durationInFrames={s5}>
           <Scene5 durationInFrames={s5} />
         </TransitionSeries.Sequence>
 
         <TransitionSeries.Transition
           presentation={fade()}
-          timing={linearTiming({ durationInFrames: FADE_FRAMES })}
+          timing={linearTiming({ durationInFrames: 12 })}
         />
 
-        {/* Scene 6 — Coastal Cliffs */}
         <TransitionSeries.Sequence durationInFrames={s6}>
           <Scene6 durationInFrames={s6} />
         </TransitionSeries.Sequence>
 
         <TransitionSeries.Transition
-          presentation={fade()}
-          timing={linearTiming({ durationInFrames: FADE_FRAMES })}
+          presentation={slide({ direction: "from-left" })}
+          timing={linearTiming({ durationInFrames: 10 })}
         />
 
-        {/* Scene 7 — Desert Dunes */}
         <TransitionSeries.Sequence durationInFrames={s7}>
           <Scene7 durationInFrames={s7} />
         </TransitionSeries.Sequence>
 
-        {/* LightLeak bridge: centered on the S7/S8 cut */}
-        <TransitionSeries.Overlay durationInFrames={30}>
+        <TransitionSeries.Overlay durationInFrames={25}>
           <LightLeak seed={7} hueShift={200} />
         </TransitionSeries.Overlay>
 
-        {/* Scene 8 — Night Sky Finale */}
         <TransitionSeries.Sequence durationInFrames={s8}>
           <Scene8 durationInFrames={s8} />
         </TransitionSeries.Sequence>
-
       </TransitionSeries>
 
-      {/* ── Post-processing overlays ── */}
+      {/* ── Audio: hoisted per-scene voiceover tracks ── */}
+      <Sequence from={audioStarts[0]} premountFor={fps}>
+        <Audio
+          src={staticFile("voiceover/scene1.mp3")}
+          volume={(f) =>
+            interpolate(f, [0, 1 * fps], [0, 1], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            })
+          }
+        />
+      </Sequence>
+      <Sequence from={audioStarts[1]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene2.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[2]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene3.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[3]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene4.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[4]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene5.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[5]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene6.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[6]} premountFor={fps}>
+        <Audio src={staticFile("voiceover/scene7.mp3")} />
+      </Sequence>
+      <Sequence from={audioStarts[7]} premountFor={fps}>
+        <Audio
+          src={staticFile("voiceover/scene8.mp3")}
+          volume={(f) =>
+            interpolate(f, [s8 - 2 * fps, s8], [1, 0], {
+              extrapolateLeft: "clamp",
+              extrapolateRight: "clamp",
+            })
+          }
+        />
+      </Sequence>
 
-      {/* Vignette */}
+      {/* ── Post-processing overlays ── */}
       <AbsoluteFill
         style={{
           background:
-            "radial-gradient(ellipse at 50% 50%, transparent 40%, rgba(0,0,0,0.55) 100%)",
+            "radial-gradient(ellipse at 50% 50%, transparent 30%, rgba(0,0,0,0.65) 100%)",
           pointerEvents: "none",
         }}
       />
-
-      {/* Film grain */}
       <AbsoluteFill
         style={{
           backgroundImage: grainUrl,
@@ -170,16 +232,39 @@ export const NarratedParallax: React.FC<NarratedParallaxProps> = ({ sceneDuratio
           pointerEvents: "none",
         }}
       />
-
-      {/* Warm wash */}
       <AbsoluteFill
         style={{
-          background: "rgba(255,180,100,0.04)",
+          background: "rgba(255,170,80,0.03)",
           mixBlendMode: "overlay",
           pointerEvents: "none",
         }}
       />
-
     </AbsoluteFill>
   );
+};
+
+// ── SceneDebug: render a single scene at 135 frames for still verification ──
+
+export const SceneDebug: React.FC<SceneDebugProps> = ({ sceneIndex }) => {
+  const duration = FALLBACK_FRAMES;
+  switch (sceneIndex) {
+    case 1:
+      return <Scene1 durationInFrames={duration} />;
+    case 2:
+      return <Scene2 durationInFrames={duration} />;
+    case 3:
+      return <Scene3 durationInFrames={duration} />;
+    case 4:
+      return <Scene4 durationInFrames={duration} />;
+    case 5:
+      return <Scene5 durationInFrames={duration} />;
+    case 6:
+      return <Scene6 durationInFrames={duration} />;
+    case 7:
+      return <Scene7 durationInFrames={duration} />;
+    case 8:
+      return <Scene8 durationInFrames={duration} />;
+    default:
+      return null;
+  }
 };

@@ -1,143 +1,139 @@
-/** Scene 1 — STARFIELD MOUNTAINS
- *  Indigo/purple sky, 42 twinkling stars, jagged mountain ranges, pine treeline.
- *  Motion: pure forward zoom (1.0 → 1.9), upward drift −200 px.
- */
 import React from "react";
-import { AbsoluteFill, Easing, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
-import { Audio } from "@remotion/media";
-import { ParallaxLayer } from "./ParallaxLayer";
+import { useVideoConfig } from "remotion";
+import {
+  FORWARD_EASING,
+  ParallaxLayer,
+  SceneStage,
+  useSceneProgress,
+} from "./ParallaxLayer";
 
-const ZOOM_START = 1.0;
-const ZOOM_END   = 1.9;
-const DRIFT_X    = 0;
-const DRIFT_Y    = -200;
-
-// ── Sub-components ────────────────────────────────────────────
-
-const Background: React.FC = () => (
-  <div style={{ position: "absolute", inset: 0,
-    background: "linear-gradient(180deg,#060418 0%,#110832 25%,#1e1050 55%,#2e1c64 80%,#3c2878 100%)" }} />
-);
-
-const Stars: React.FC = () => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  return (
-    <svg viewBox="0 0 1920 1080" style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-      {Array.from({ length: 42 }, (_, i) => {
-        const cx = ((i * 173.7 + 300) % 1920).toFixed(0);
-        const cy = ((i * 97.3  + 50)  % 540).toFixed(0);   // top 50 %
-        const r  = 0.8 + (i % 4) * 0.6;
-        const base = 0.3 + (i % 6) * 0.1;
-        const opacity = Math.max(0.05, Math.min(1,
-          base + Math.sin(frame / fps * 1.5 + i * 0.83) * 0.28));
-        return <circle key={i} cx={cx} cy={cy} r={r} fill="white" opacity={opacity} />;
-      })}
-    </svg>
-  );
+const makeRng = (seed: number) => {
+  let s = seed;
+  return () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
 };
 
-const FarMountains: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    <polygon
-      points="0,1080 0,740 180,560 400,680 620,470 860,610 1080,400 1300,530 1540,460 1760,570 1920,500 1920,1080"
-      fill="#1a1a3a" />
-  </svg>
-);
+const STARS = (() => {
+  const r = makeRng(12345);
+  return Array.from({ length: 55 }, () => ({
+    x: Math.round(r() * 1920),
+    y: Math.round(r() * 620),
+    radius: 0.8 + r() * 2.2,
+    phase: r() * Math.PI * 2,
+    speed: 0.9 + r() * 1.8,
+  }));
+})();
 
-const MidMountains: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    <polygon
-      points="0,1080 0,800 160,660 360,740 580,600 800,700 1020,570 1240,650 1460,590 1680,660 1920,620 1920,1080"
-      fill="#2a2a5a" />
-  </svg>
-);
+const FAR_MOUNTAINS =
+  "0,560 80,500 160,540 240,470 320,510 400,455 480,520 560,470 640,505 720,445 800,500 880,460 960,510 1040,440 1120,495 1200,460 1280,500 1360,455 1440,525 1520,470 1600,500 1680,440 1760,495 1840,465 1920,505 1920,1080 0,1080";
 
-const Treeline: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    {Array.from({ length: 20 }, (_, i) => {
-      const x   = 40 + (i / 20) * 1840 + ((i * 47) % 60) - 30;
-      const h   = 130 + (i % 6) * 28;
-      const w   = 32 + (i % 4) * 10;
-      const tip = 1080 - h;
-      const fill = i % 3 === 0 ? "#0e1824" : i % 3 === 1 ? "#121e2c" : "#0a1418";
-      return (
-        <polygon key={i}
-          points={`${x},${1080} ${x - w/2},${tip} ${x + w/2},${tip}`}
-          fill={fill} />
-      );
-    })}
-  </svg>
-);
+const MID_MOUNTAINS =
+  "0,620 120,525 240,585 360,480 480,555 600,500 720,570 840,475 960,540 1080,505 1200,570 1320,475 1440,550 1560,495 1680,560 1800,495 1920,545 1920,1080 0,1080";
 
-const Boulders: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    <polygon points="80,1080  50,940  160,910 220,960 200,1080"  fill="#08081a" />
-    <polygon points="340,1080 310,960 430,940 480,980 460,1080"  fill="#0b0b1e" />
-    <polygon points="1580,1080 1550,930 1670,910 1730,960 1710,1080" fill="#08081a" />
-    <polygon points="1800,1080 1770,950 1880,930 1920,980 1920,1080" fill="#0b0b1e" />
-    {/* Grass tufts */}
-    {Array.from({ length: 18 }, (_, i) => {
-      const x = 60 + i * 104;
-      return (
-        <g key={i}>
-          <line x1={x} y1={1080} x2={x-8}  y2={1040} stroke="#1a2042" strokeWidth={2.5} />
-          <line x1={x+5} y1={1080} x2={x+12} y2={1035} stroke="#1a2042" strokeWidth={2.5} />
-          <line x1={x+10} y1={1080} x2={x+4} y2={1044} stroke="#141832" strokeWidth={2} />
-        </g>
-      );
-    })}
-  </svg>
-);
+const PINE_LEFT = [
+  { x: 30, top: 560, halfW: 45 },
+  { x: 95, top: 490, halfW: 55 },
+  { x: 155, top: 530, halfW: 48 },
+  { x: 200, top: 470, halfW: 60 },
+  { x: 245, top: 545, halfW: 42 },
+];
+const PINE_RIGHT = [
+  { x: 1680, top: 560, halfW: 45 },
+  { x: 1740, top: 480, halfW: 55 },
+  { x: 1800, top: 530, halfW: 48 },
+  { x: 1855, top: 495, halfW: 60 },
+  { x: 1905, top: 555, halfW: 42 },
+];
 
-const Foreground: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    <rect x={0} y={1010} width={1920} height={70} fill="#060612" />
-    <rect x={0} y={1040} width={1920} height={40}  fill="#040410" />
-  </svg>
-);
+const pinePts = (p: { x: number; top: number; halfW: number }) =>
+  `${p.x - p.halfW},1080 ${p.x + p.halfW},1080 ${p.x},${p.top}`;
 
-// ── Scene 1 ──────────────────────────────────────────────────
-
-interface SceneProps { durationInFrames: number }
-
-export const Scene1: React.FC<SceneProps> = ({ durationInFrames }) => {
-  const frame = useCurrentFrame();
+export const Scene1: React.FC<{ durationInFrames: number }> = ({
+  durationInFrames,
+}) => {
+  const { progress, frame } = useSceneProgress(durationInFrames, FORWARD_EASING);
   const { fps } = useVideoConfig();
 
-  const progress = interpolate(frame, [0, durationInFrames], [0, 1], {
-    easing: Easing.bezier(0.25, 1, 0.35, 1),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  const lp = { progress, zoomStart: ZOOM_START, zoomEnd: ZOOM_END, driftX: DRIFT_X, driftY: DRIFT_Y };
+  const z = { zoomStart: 1.0, zoomEnd: 3.0, driftY: -300 };
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#060418", overflow: "hidden" }}>
-      <div style={{ width:"100%", height:"100%", perspective: 800, perspectiveOrigin: "50% 55%" }}>
-        <ParallaxLayer depth={0.0}  {...lp}><Background /></ParallaxLayer>
-        <ParallaxLayer depth={0.15} {...lp}><Stars /></ParallaxLayer>
-        <ParallaxLayer depth={0.25} {...lp}><FarMountains /></ParallaxLayer>
-        <ParallaxLayer depth={0.45} {...lp}><MidMountains /></ParallaxLayer>
-        <ParallaxLayer depth={0.65} {...lp}><Treeline /></ParallaxLayer>
-        <ParallaxLayer depth={0.85} {...lp}><Boulders /></ParallaxLayer>
-        <ParallaxLayer depth={1.0}  {...lp}><Foreground /></ParallaxLayer>
-      </div>
-      <Audio
-        src={staticFile("voiceover/scene1.mp3")}
-        volume={(f) =>
-          interpolate(f, [0, fps], [0, 1], {
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-          })
-        }
-      />
-    </AbsoluteFill>
+    <SceneStage background="#050515">
+      <ParallaxLayer depth={0.0} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="s1-sky" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#090925" />
+              <stop offset="55%" stopColor="#1a0a3a" />
+              <stop offset="100%" stopColor="#2a1a5a" />
+            </linearGradient>
+          </defs>
+          <rect width="1920" height="1080" fill="url(#s1-sky)" />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.1} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          {STARS.map((s, i) => {
+            const tw =
+              0.35 +
+              0.65 * (0.5 + 0.5 * Math.sin((frame / fps) * s.speed + s.phase));
+            return (
+              <circle
+                key={i}
+                cx={s.x}
+                cy={s.y}
+                r={s.radius}
+                fill="#ffffff"
+                opacity={tw}
+              />
+            );
+          })}
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.25} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <polygon points={FAR_MOUNTAINS} fill="#1a1a3a" />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.5} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <polygon points={MID_MOUNTAINS} fill="#181830" />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.7} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          {PINE_LEFT.map((p, i) => (
+            <polygon key={`pl${i}`} points={pinePts(p)} fill="#070714" />
+          ))}
+          {PINE_RIGHT.map((p, i) => (
+            <polygon key={`pr${i}`} points={pinePts(p)} fill="#070714" />
+          ))}
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.9} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <polygon
+            points="0,990 40,900 120,875 190,915 225,975 210,1080 0,1080"
+            fill="#03030a"
+          />
+          <polygon
+            points="1715,995 1760,905 1830,880 1895,930 1920,990 1920,1080 1715,1080"
+            fill="#03030a"
+          />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={1.0} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <rect x="0" y="980" width="1920" height="100" fill="#01010a" />
+        </svg>
+      </ParallaxLayer>
+    </SceneStage>
   );
 };

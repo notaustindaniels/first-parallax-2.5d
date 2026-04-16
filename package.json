@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "studio": "npx remotion studio",
-    "render": "npx remotion render ParallaxZoom out/parallax.mp4"
+    "render": "npx remotion render NarratedParallax out/parallax.mp4"
   },
   "dependencies": {
     "@remotion/cli": "4.0.448",

@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
     const audioBuffer = Buffer.from(await response.arrayBuffer());
     writeFileSync(outPath, audioBuffer);
-    console.log(`  ✓ ${outPath} (${(audioBuffer.length / 1024).toFixed(0)} KB)`);
+    console.log(`  \u2713 ${outPath} (${(audioBuffer.length / 1024).toFixed(0)} KB)`);
   }
 
   console.log(

@@ -1,140 +1,162 @@
-/** Scene 5 — FOREST FLOOR
- *  Dark green-to-black. Canopy layers, tree trunks, fireflies, giant leaf foreground.
- *  Motion: diagonal push (driftY −120, driftX −100).
- */
 import React from "react";
-import { AbsoluteFill, Easing, interpolate, staticFile, useCurrentFrame, useVideoConfig } from "remotion";
-import { Audio } from "@remotion/media";
-import { ParallaxLayer } from "./ParallaxLayer";
+import { useVideoConfig } from "remotion";
+import {
+  FORWARD_EASING,
+  ParallaxLayer,
+  SceneStage,
+  useSceneProgress,
+} from "./ParallaxLayer";
 
-const ZOOM_START = 1.0;
-const ZOOM_END   = 1.7;
-const DRIFT_X    = -100;
-const DRIFT_Y    = -120;
+const CANOPY = [
+  { cx: 120, cy: 180, rx: 220, ry: 140 },
+  { cx: 380, cy: 140, rx: 260, ry: 160 },
+  { cx: 640, cy: 200, rx: 240, ry: 150 },
+  { cx: 900, cy: 150, rx: 280, ry: 170 },
+  { cx: 1160, cy: 210, rx: 260, ry: 160 },
+  { cx: 1420, cy: 170, rx: 240, ry: 150 },
+  { cx: 1680, cy: 200, rx: 260, ry: 170 },
+  { cx: 1900, cy: 140, rx: 220, ry: 140 },
+];
 
-// ── Sub-components ────────────────────────────────────────────
+const TRUNK_X = [80, 290, 500, 720, 960, 1190, 1410, 1620, 1840];
 
-const Background: React.FC = () => (
-  <div style={{ position:"absolute", inset:0,
-    background: "linear-gradient(180deg,#030a04 0%,#04100a 40%,#030808 75%,#020604 100%)" }} />
-);
+const FIREFLIES = (() => {
+  let s = 7777;
+  const r = () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+  return Array.from({ length: 26 }, () => ({
+    x: r() * 1920,
+    y: 260 + r() * 620,
+    phase: r() * Math.PI * 2,
+    speed: 1.4 + r() * 1.3,
+  }));
+})();
 
-const Canopy: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    {Array.from({ length: 18 }, (_, i) => {
-      const cx = (i / 18) * 2100 - 90;
-      const cy = 80 + (i % 5) * 60;
-      const rx = 200 + (i % 4) * 60;
-      const ry = 120 + (i % 3) * 40;
-      const fill = i % 3 === 0 ? "#081808" : i % 3 === 1 ? "#0a1e0c" : "#061206";
-      return <ellipse key={i} cx={cx} cy={cy} rx={rx} ry={ry} fill={fill} />;
-    })}
-  </svg>
-);
+const MUSHROOMS = [
+  { x: 180, y: 920 },
+  { x: 340, y: 940 },
+  { x: 540, y: 930 },
+  { x: 780, y: 950 },
+  { x: 1080, y: 935 },
+  { x: 1300, y: 945 },
+  { x: 1520, y: 925 },
+  { x: 1720, y: 945 },
+];
 
-const TreeTrunks: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    {Array.from({ length: 12 }, (_, i) => {
-      const x = 60 + (i / 12) * 1800;
-      const w = 22 + (i % 4) * 8;
-      const fill = i % 2 === 0 ? "#1a120a" : "#141008";
-      return <rect key={i} x={x - w/2} y={180} width={w} height={900} fill={fill} />;
-    })}
-  </svg>
-);
+const LEAF_D =
+  "M 1920,1080 C 1700,1060 1420,1000 1240,880 C 1080,780 980,620 1100,520 C 1200,440 1380,460 1520,540 C 1680,640 1820,780 1900,900 C 1920,960 1920,1020 1920,1080 Z";
 
-const GroundPlants: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    {/* Mushrooms */}
-    {[200, 520, 840, 1160, 1480, 1760].map((x, i) => (
-      <g key={i}>
-        <ellipse cx={x} cy={940} rx={25} ry={12} fill="#3a2820" />
-        <rect x={x-5} y={910} width={10} height={35} fill="#2a1e16" />
-        <ellipse cx={x} cy={910} rx={28} ry={18} fill="#c04820" opacity={0.8} />
-      </g>
-    ))}
-    {/* Fern fronds (simplified) */}
-    {Array.from({ length: 8 }, (_, i) => {
-      const bx = 100 + i * 230;
-      return (
-        <g key={i}>
-          <path d={`M${bx},1080 Q${bx-30},${980} ${bx-50},${940}`}
-            stroke="#0e2010" strokeWidth={8} fill="none" />
-          <path d={`M${bx},1080 Q${bx+30},${970} ${bx+60},${930}`}
-            stroke="#0e2010" strokeWidth={6} fill="none" />
-        </g>
-      );
-    })}
-  </svg>
-);
-
-const Fireflies: React.FC = () => {
-  const frame = useCurrentFrame();
+export const Scene5: React.FC<{ durationInFrames: number }> = ({
+  durationInFrames,
+}) => {
+  const { progress, frame } = useSceneProgress(durationInFrames, FORWARD_EASING);
   const { fps } = useVideoConfig();
-  return (
-    <svg viewBox="0 0 1920 1080"
-      style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-      {Array.from({ length: 22 }, (_, i) => {
-        const cx = ((i * 173 + 200) % 1600) + 160;
-        const cy = 400 + (i % 8) * 70;
-        const opacity = Math.max(0, Math.sin(frame / fps * 1.2 + i * 0.97)) * 0.9;
-        return (
-          <g key={i}>
-            <circle cx={cx} cy={cy} r={6}  fill="#80ff80" opacity={opacity * 0.4} />
-            <circle cx={cx} cy={cy} r={2.5} fill="#c0ffc0" opacity={opacity} />
-          </g>
-        );
-      })}
-    </svg>
-  );
-};
 
-const LeafForeground: React.FC = () => (
-  <svg viewBox="0 0 1920 1080" preserveAspectRatio="none"
-    style={{ position:"absolute",inset:0,width:"100%",height:"100%" }}>
-    {/* Large leaf from bottom-right */}
-    <path
-      d="M1920,1080 Q1700,900 1500,800 Q1600,700 1700,650 Q1800,650 1900,700 Q1950,750 1920,800 Q1980,820 1920,1080"
-      fill="#061008" />
-    <path
-      d="M1920,1080 Q1750,950 1600,860 Q1680,780 1780,740"
-      stroke="#081410" strokeWidth={6} fill="none" />
-    <rect x={0} y={1020} width={1920} height={60} fill="#020604" />
-  </svg>
-);
-
-// ── Scene 5 ──────────────────────────────────────────────────
-
-interface SceneProps { durationInFrames: number }
-
-export const Scene5: React.FC<SceneProps> = ({ durationInFrames }) => {
-  const frame = useCurrentFrame();
-
-  const progress = interpolate(frame, [0, durationInFrames], [0, 1], {
-    easing: Easing.bezier(0.25, 1, 0.35, 1),
-    extrapolateLeft: "clamp",
-    extrapolateRight: "clamp",
-  });
-
-  const lp = { progress, zoomStart: ZOOM_START, zoomEnd: ZOOM_END, driftX: DRIFT_X, driftY: DRIFT_Y };
+  const z = { zoomStart: 1.0, zoomEnd: 2.8, driftX: -150, driftY: -200 };
 
   return (
-    <AbsoluteFill style={{ backgroundColor: "#020604", overflow: "hidden" }}>
-      <div style={{ width:"100%", height:"100%", perspective: 800, perspectiveOrigin: "50% 55%" }}>
-        <ParallaxLayer depth={0.0}  {...lp}><Background /></ParallaxLayer>
-        <ParallaxLayer depth={0.2}  {...lp}><Canopy /></ParallaxLayer>
-        <ParallaxLayer depth={0.4}  {...lp}><TreeTrunks /></ParallaxLayer>
-        <ParallaxLayer depth={0.55} {...lp}><GroundPlants /></ParallaxLayer>
-        <ParallaxLayer depth={0.7}  {...lp}><Fireflies /></ParallaxLayer>
-        <ParallaxLayer depth={0.85} {...lp}><LeafForeground /></ParallaxLayer>
-        <ParallaxLayer depth={1.0}  {...lp}>
-          <div style={{ position:"absolute",bottom:0,left:0,right:0,height:55,background:"#020604" }} />
-        </ParallaxLayer>
-      </div>
-      <Audio src={staticFile("voiceover/scene5.mp3")} />
-    </AbsoluteFill>
+    <SceneStage background="#030805">
+      <ParallaxLayer depth={0.0} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="s5-sky" cx="50%" cy="40%" r="80%">
+              <stop offset="0%" stopColor="#0a1810" />
+              <stop offset="100%" stopColor="#020505" />
+            </radialGradient>
+          </defs>
+          <rect width="1920" height="1080" fill="url(#s5-sky)" />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.2} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          {CANOPY.map((c, i) => (
+            <ellipse
+              key={i}
+              cx={c.cx}
+              cy={c.cy}
+              rx={c.rx}
+              ry={c.ry}
+              fill="#0a1810"
+              opacity={0.95}
+            />
+          ))}
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.5} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          {TRUNK_X.map((tx, i) => (
+            <rect
+              key={i}
+              x={tx - 25}
+              y={-20}
+              width={50}
+              height={1100}
+              fill="#050805"
+            />
+          ))}
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.65} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          {MUSHROOMS.map((m, i) => (
+            <g key={i}>
+              <rect x={m.x - 4} y={m.y} width={8} height={22} fill="#1a120a" />
+              <ellipse cx={m.x} cy={m.y - 2} rx={18} ry={10} fill="#6a2a1a" />
+              <ellipse cx={m.x - 6} cy={m.y - 6} rx={3} ry={2} fill="#f0d0a0" opacity={0.6} />
+              <ellipse cx={m.x + 4} cy={m.y - 4} rx={2} ry={1.5} fill="#f0d0a0" opacity={0.5} />
+            </g>
+          ))}
+          <path
+            d="M 0,1000 Q 120,960 240,990 T 480,985 T 720,995 T 960,985 T 1200,990 T 1440,985 T 1680,995 T 1920,985 L 1920,1080 L 0,1080 Z"
+            fill="#060c08"
+          />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.75} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="s5-fly" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#e8ffa0" stopOpacity="0.95" />
+              <stop offset="50%" stopColor="#a0c050" stopOpacity="0.35" />
+              <stop offset="100%" stopColor="#405030" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          {FIREFLIES.map((f, i) => {
+            const pulse =
+              0.25 + 0.75 * (0.5 + 0.5 * Math.sin((frame / fps) * f.speed + f.phase));
+            return (
+              <g key={i}>
+                <circle cx={f.x} cy={f.y} r={18} fill="url(#s5-fly)" opacity={pulse} />
+                <circle cx={f.x} cy={f.y} r={2.5} fill="#fcffd0" opacity={pulse} />
+              </g>
+            );
+          })}
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={0.9} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <path d={LEAF_D} fill="#040a06" />
+          <path
+            d="M 1920,1080 C 1780,1020 1620,940 1500,820 C 1380,700 1280,580 1260,500"
+            stroke="#0a1208"
+            strokeWidth="4"
+            fill="none"
+          />
+        </svg>
+      </ParallaxLayer>
+
+      <ParallaxLayer depth={1.0} {...z} progress={progress}>
+        <svg width="1920" height="1080" xmlns="http://www.w3.org/2000/svg">
+          <rect x="0" y="970" width="1920" height="110" fill="#020604" />
+        </svg>
+      </ParallaxLayer>
+    </SceneStage>
   );
 };
