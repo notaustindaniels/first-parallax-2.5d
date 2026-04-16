@@ -1,11 +1,10 @@
 /** SceneFPVForest — FPV drone flythrough, forest at night.
  *
- *  Architecture: painted cutout plates. Each plate is ONE full-frame
- *  SVG painting with dense tree silhouettes everywhere and a small
- *  transparent hole at the center. The plate's outer div is 300vw ×
- *  300vh so at translateZ(0) the painting overflows the viewport and
- *  the viewer sees only its central region; at deep negative Z the
- *  whole painting shrinks to a small ring framing the static sky.
+ *  Phase 8: ORGANIC negative space. No geometric masks, no hole-punched
+ *  circles. The "hole" is the natural gap between dense overlapping tree
+ *  trunks on the sides, canopy hanging from the top, and ground rolling
+ *  from the bottom. Branches and leaves jut INTO the center from both sides,
+ *  creating an irregular, organic frame — not a perfect ellipse.
  */
 import React from "react";
 import {
@@ -16,19 +15,12 @@ import {
   sceneRng,
 } from "./fpvRecipe";
 
-// ─── SCENE KIT §1 — Palette ─────────────────────────────────────
-
 const palette = {
   backgroundGradient:
     "radial-gradient(ellipse at 50% 42%, #1f3868 0%, #102040 40%, #04091c 100%)",
   fogColor: "rgba(8,16,30,0.55)",
   showStarfield: true,
 };
-
-// ─── SCENE KIT §2 — Cutout paint function ──────────────────────
-// Paints dense tree silhouettes across the whole SVG with a tight
-// central hole. Deeper plates get slightly less density and a larger
-// hole so they read as "distant rings" through the tunnel.
 
 const buildForestCutout = ({
   plateIndex,
@@ -38,145 +30,82 @@ const buildForestCutout = ({
   height,
 }: PlateCutoutProps): React.ReactNode => {
   const depth = plateDepth(plateIndex, plateCount);
-  const cx = width / 2;
-  const cy = height * 0.52;
   const rand = sceneRng(seed);
 
-  // Hole size — smaller on near plates (claustrophobic), larger on
-  // distant plates (opens up into the tunnel).
-  const holeW = width * (0.14 + depth * 0.08);
-  const holeH = height * (0.18 + depth * 0.08);
+  // ── Color palette — brighter for far plates so distant rings read
+  const canopyColor = depth > 0.5 ? "#1a3020" : "#0a1810";
+  const trunkColor = depth > 0.5 ? "#12221a" : "#08120c";
+  const groundColor = depth > 0.5 ? "#0e1c14" : "#060e0a";
+  const branchColor = depth > 0.5 ? "#16281e" : "#0c1a12";
 
-  const maskId = `forest-hole-${plateIndex}-${seed}`;
+  // ── Left-side tree trunks (dense wall, x from 0 to ~42% of width)
+  const leftWallWidth = width * (0.38 - depth * 0.06); // thicker for near plates
+  const leftTrunkCount = 8 + Math.floor((1 - depth) * 5);
+  const leftTrunks = Array.from({ length: leftTrunkCount }, (_, i) => {
+    const x = rand() * leftWallWidth;
+    const w = 50 + rand() * 100 + (1 - depth) * 30;
+    const h = height * (0.6 + rand() * 0.45);
+    return { x, w, h, canopyRx: w * 1.8 + rand() * 60, canopyRy: w * 1.0 + rand() * 40 };
+  });
 
-  // Total tree count across the full frame.
-  const treeCount = 18 + Math.floor((1 - depth) * 8);
+  // ── Right-side tree trunks
+  const rightWallWidth = width * (0.38 - depth * 0.06);
+  const rightTrunkCount = 8 + Math.floor((1 - depth) * 5);
+  const rightTrunks = Array.from({ length: rightTrunkCount }, (_, i) => {
+    const x = width - rightWallWidth + rand() * rightWallWidth;
+    const w = 50 + rand() * 100 + (1 - depth) * 30;
+    const h = height * (0.6 + rand() * 0.45);
+    return { x, w, h, canopyRx: w * 1.8 + rand() * 60, canopyRy: w * 1.0 + rand() * 40 };
+  });
 
-  type Tree = {
-    x: number;
-    baseY: number;
-    w: number;
-    h: number;
-    canopyR: number;
-    flipped: boolean;
-  };
+  // ── Branches jutting into center from both sides (organic framing)
+  const branchCount = 6 + Math.floor((1 - depth) * 4);
+  const branches = Array.from({ length: branchCount }, (_, i) => {
+    const fromLeft = i % 2 === 0;
+    const baseX = fromLeft
+      ? leftWallWidth - 40 + rand() * 80
+      : width - rightWallWidth - 40 + rand() * 80;
+    const tipX = fromLeft
+      ? baseX + 100 + rand() * 300
+      : baseX - 100 - rand() * 300;
+    const y = 80 + rand() * (height * 0.65);
+    const thickness = 12 + rand() * 30;
+    // Leaf cluster at the tip
+    const leafR = 40 + rand() * 80;
+    return { baseX, tipX, y, thickness, leafR };
+  });
 
-  // Distribute trees across the whole width. Nudge them away from the
-  // central hole so the opening stays clear — but still allow some to
-  // overlap the hole perimeter for an organic edge.
-  const trees: Tree[] = [];
-  let attempts = 0;
-  while (trees.length < treeCount && attempts < treeCount * 4) {
-    attempts++;
-    const x = rand() * width;
-    // Distance from the center of the hole (horizontally only — the
-    // y-position is always ground-anchored).
-    const distFromHoleCenterX = Math.abs(x - cx);
-    // Reject trees whose trunk would hit the hole, unless they're
-    // short enough that the canopy doesn't reach the hole ceiling.
-    if (distFromHoleCenterX < holeW * 0.38 && rand() > 0.15) continue;
-
-    const hBase = 360 + rand() * 380;
-    const w = 56 + rand() * 80;
-    const baseY = height - 40 + rand() * 40;
-    trees.push({
-      x,
-      baseY,
-      w,
-      h: hBase,
-      canopyR: w * 2.2 + rand() * 30,
-      flipped: rand() > 0.5,
-    });
+  // ── Canopy across the top — jagged polygon, NO mask
+  const canopyBaseY = height * (0.28 - depth * 0.08);
+  const canopySamples = 22;
+  const canopyPoints: string[] = [`0,0`, `${width},0`];
+  for (let i = 0; i <= canopySamples; i++) {
+    const x = width - (i / canopySamples) * width;
+    const droop = canopyBaseY + Math.sin(i * 1.4 + plateIndex * 2.7) * 50 + rand() * 30;
+    canopyPoints.push(`${x.toFixed(0)},${droop.toFixed(0)}`);
   }
+  canopyPoints.push(`0,${canopyBaseY.toFixed(0)}`);
 
-  // Foreground tree clusters — bigger, drawn on top, biased to sides
-  // so they form the edge of the vignette even when the plate is close.
-  const foregroundClusterCount = 4 + Math.floor((1 - depth) * 3);
-  const clusters: Tree[] = Array.from(
-    { length: foregroundClusterCount },
-    (_, i) => {
-      const sideSign = i % 2 === 0 ? -1 : 1;
-      const horizOffset = 200 + rand() * (width * 0.35);
-      const x = cx + sideSign * horizOffset;
-      return {
-        x,
-        baseY: height - 20 + rand() * 20,
-        w: 120 + rand() * 100,
-        h: 700 + rand() * 260,
-        canopyR: 260 + rand() * 120,
-        flipped: false,
-      };
-    },
-  );
+  // ── Hanging vine/branch tendrils from the canopy (organic edge)
+  const tendrilCount = 5 + Math.floor((1 - depth) * 3);
+  const tendrils = Array.from({ length: tendrilCount }, () => {
+    const x = 200 + rand() * (width - 400);
+    const startY = canopyBaseY + rand() * 60;
+    const endY = startY + 80 + rand() * 200;
+    const w = 6 + rand() * 14;
+    return { x, startY, endY, w };
+  });
 
-  // Canopy ceiling — a wavy polygon along the top of the SVG
-  const canopyDepth = height * (0.32 - depth * 0.1);
-  const canopyPts: string[] = [`0,0`, `${width},0`];
-  const samples = 26;
-  for (let i = 0; i <= samples; i++) {
-    const x = width - (i / samples) * width;
-    // Avoid dipping into the hole
-    const distanceToHole = Math.max(0, holeH / 2 - Math.abs(cy - canopyDepth));
-    const base = canopyDepth + Math.sin(i * 0.8 + plateIndex * 2.3) * 40;
-    const y = Math.max(0, base - distanceToHole * 0.2 + rand() * 30 - 15);
-    canopyPts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  // ── Ground rolling from the bottom
+  const groundBaseY = height * (0.78 + depth * 0.06);
+  const groundSamples = 20;
+  const groundPoints: string[] = [`0,${height}`, `${width},${height}`];
+  for (let i = 0; i <= groundSamples; i++) {
+    const x = width - (i / groundSamples) * width;
+    const rise = groundBaseY + Math.sin(i * 1.1 + plateIndex * 1.9) * 30 + rand() * 20 - 10;
+    groundPoints.push(`${x.toFixed(0)},${rise.toFixed(0)}`);
   }
-  canopyPts.push(`0,0`);
-
-  // Ground silhouette — along the bottom
-  const groundDepth = height * (0.22 - depth * 0.08);
-  const groundTop = height - groundDepth;
-  const groundPts: string[] = [`0,${height}`, `${width},${height}`];
-  for (let i = 0; i <= samples; i++) {
-    const x = width - (i / samples) * width;
-    const y =
-      groundTop +
-      Math.sin(i * 0.9 + plateIndex * 1.7) * 24 +
-      rand() * 18 -
-      9;
-    groundPts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-  }
-  groundPts.push(`0,${height}`);
-
-  // Deeper plates are BRIGHTER than near plates — perspective + DOF
-  // naturally darkens closer plates via the vignette/fog overlays, so
-  // far plates need more punch to stay visible as distant rings.
-  const canopyColor = depth > 0.5 ? "#1a2e20" : "#0a1810";
-  const trunkColor = depth > 0.5 ? "#12201a" : "#08120d";
-  const groundColor = depth > 0.5 ? "#0c1a12" : "#060e0a";
-
-  const drawTree = (t: Tree, idx: number, keyPrefix: string) => (
-    <g key={`${keyPrefix}-${idx}`}>
-      <rect
-        x={t.x - t.w / 2}
-        y={t.baseY - t.h}
-        width={t.w}
-        height={t.h}
-        fill={trunkColor}
-      />
-      <ellipse
-        cx={t.x}
-        cy={t.baseY - t.h + 30}
-        rx={t.canopyR}
-        ry={t.canopyR * 0.55}
-        fill={canopyColor}
-      />
-      <ellipse
-        cx={t.x - t.canopyR * 0.3}
-        cy={t.baseY - t.h + t.canopyR * 0.3}
-        rx={t.canopyR * 0.7}
-        ry={t.canopyR * 0.4}
-        fill={canopyColor}
-      />
-      <ellipse
-        cx={t.x + t.canopyR * 0.3}
-        cy={t.baseY - t.h + t.canopyR * 0.35}
-        rx={t.canopyR * 0.7}
-        ry={t.canopyR * 0.4}
-        fill={canopyColor}
-      />
-    </g>
-  );
+  groundPoints.push(`0,${groundBaseY.toFixed(0)}`);
 
   return (
     <svg
@@ -184,49 +113,97 @@ const buildForestCutout = ({
       preserveAspectRatio="xMidYMid slice"
       style={{ width: "100%", height: "100%", display: "block" }}
     >
-      <defs>
-        <mask id={maskId}>
-          <rect x={0} y={0} width={width} height={height} fill="white" />
-          <ellipse
-            cx={cx}
-            cy={cy}
-            rx={holeW / 2}
-            ry={holeH / 2}
-            fill="black"
+      {/* Canopy ceiling — drawn first, backdrop */}
+      <polygon points={canopyPoints.join(" ")} fill={canopyColor} />
+
+      {/* Ground silhouette */}
+      <polygon points={groundPoints.join(" ")} fill={groundColor} />
+
+      {/* Left tree wall — trunks + canopies */}
+      {leftTrunks.map((t, i) => (
+        <g key={`lt-${i}`}>
+          <rect x={t.x} y={height - t.h} width={t.w} height={t.h} fill={trunkColor} />
+          <ellipse cx={t.x + t.w / 2} cy={height - t.h} rx={t.canopyRx} ry={t.canopyRy} fill={canopyColor} />
+        </g>
+      ))}
+
+      {/* Right tree wall */}
+      {rightTrunks.map((t, i) => (
+        <g key={`rt-${i}`}>
+          <rect x={t.x} y={height - t.h} width={t.w} height={t.h} fill={trunkColor} />
+          <ellipse cx={t.x + t.w / 2} cy={height - t.h} rx={t.canopyRx} ry={t.canopyRy} fill={canopyColor} />
+        </g>
+      ))}
+
+      {/* Branches jutting into the center — organic framing */}
+      {branches.map((b, i) => (
+        <g key={`br-${i}`}>
+          <line
+            x1={b.baseX}
+            y1={b.y}
+            x2={b.tipX}
+            y2={b.y - 20 + rand() * 40}
+            stroke={branchColor}
+            strokeWidth={b.thickness}
+            strokeLinecap="round"
           />
           <ellipse
-            cx={cx}
-            cy={cy}
-            rx={holeW / 2 + 36}
-            ry={holeH / 2 + 36}
-            fill="black"
-            opacity={0.4}
+            cx={b.tipX}
+            cy={b.y}
+            rx={b.leafR}
+            ry={b.leafR * 0.65}
+            fill={canopyColor}
           />
-        </mask>
-      </defs>
+        </g>
+      ))}
 
-      <g mask={`url(#${maskId})`}>
-        {/* Canopy ceiling — back layer */}
-        <polygon points={canopyPts.join(" ")} fill={canopyColor} />
-
-        {/* Background tree fills — drawn before foreground clusters */}
-        {trees.map((t, i) => drawTree(t, i, "bg"))}
-
-        {/* Ground silhouette */}
-        <polygon points={groundPts.join(" ")} fill={groundColor} />
-
-        {/* Foreground edge clusters — drawn last, biggest, dominate sides */}
-        {clusters.map((t, i) => drawTree(t, i, "fg"))}
-      </g>
+      {/* Hanging tendrils from canopy */}
+      {tendrils.map((t, i) => (
+        <line
+          key={`tend-${i}`}
+          x1={t.x}
+          y1={t.startY}
+          x2={t.x + (rand() - 0.5) * 30}
+          y2={t.endY}
+          stroke={branchColor}
+          strokeWidth={t.w}
+          strokeLinecap="round"
+        />
+      ))}
     </svg>
   );
 };
 
-// ─── Assemble the kit and produce the scene ─────────────────────
+// ─── Sub-objects: individual trees + shrubs flying past between plates
+
+const SmallTree: React.FC<{ variant: number; seed: number }> = ({ variant }) => {
+  const h = 200 + variant * 60;
+  const w = 40 + variant * 12;
+  return (
+    <svg
+      width={w * 3}
+      height={h}
+      viewBox={`${-w * 1.5} ${-h} ${w * 3} ${h}`}
+      style={{ position: "absolute", left: -w * 1.5, top: -h, overflow: "visible" }}
+    >
+      <rect x={-6} y={-50} width={12} height={50} fill="#08100c" />
+      <ellipse cx={0} cy={-50} rx={w} ry={h * 0.35} fill="#0c1a12" />
+      <ellipse cx={-w * 0.3} cy={-h * 0.45} rx={w * 0.7} ry={h * 0.25} fill="#0a1810" />
+    </svg>
+  );
+};
 
 const kit: SceneKit = {
   palette,
   buildPlateCutout: buildForestCutout,
+  subObjects: [
+    {
+      Component: SmallTree,
+      count: 15,
+      xRange: [-800, 800],
+      yRange: [100, 350],
+    },
+  ],
 };
 
 export const SceneFPVForest = createFPVScene(kit);

@@ -1,9 +1,8 @@
-/** SceneFPVCityNight — FPV drone flythrough down a neon-lit night street.
+/** SceneFPVCityNight — FPV drone flythrough down a neon-lit city canyon.
  *
- *  Painted-cutout plate architecture (see SceneFPVForest.tsx for the
- *  explanation). Only the palette and the `buildPlateCutout` function
- *  differ: buildings line the whole frame, the central hole is the
- *  street the drone flies down.
+ *  Phase 8: ORGANIC negative space. The "hole" is the V/U shaped sky gap
+ *  between building silhouettes of varying heights. No geometric masks.
+ *  Skyscrapers on both sides, walkway overhead, street gutter below.
  */
 import React from "react";
 import {
@@ -14,16 +13,12 @@ import {
   sceneRng,
 } from "./fpvRecipe";
 
-// ─── SCENE KIT §1 — Palette ─────────────────────────────────────
-
 const palette = {
   backgroundGradient:
     "linear-gradient(180deg, #2a1250 0%, #4a1640 40%, #1a0a28 85%, #05050a 100%)",
   fogColor: "rgba(30,12,48,0.55)",
   showStarfield: false,
 };
-
-// ─── SCENE KIT §2 — Cutout paint function ──────────────────────
 
 const buildCityCutout = ({
   plateIndex,
@@ -33,113 +28,80 @@ const buildCityCutout = ({
   height,
 }: PlateCutoutProps): React.ReactNode => {
   const depth = plateDepth(plateIndex, plateCount);
-  const cx = width / 2;
-  const cy = height * 0.58;
   const rand = sceneRng(seed);
-  const maskId = `city-hole-${plateIndex}-${seed}`;
+  const cx = width / 2;
 
-  // Hole — a rounded vertical rectangle (the street + sky above)
-  const holeW = width * (0.16 + depth * 0.08);
-  const holeH = height * (0.32 + depth * 0.08);
-
-  // Deeper plates brighter so distant rings still read against the fog.
   const buildingColor = depth > 0.5 ? "#1a1432" : "#0e0b1a";
-  const buildingRoofColor = depth > 0.5 ? "#2a1848" : "#180c28";
-  const streetColor = depth > 0.5 ? "#120e22" : "#0a0818";
-  const skyslabColor = depth > 0.5 ? "#180e28" : "#0a061c";
+  const roofColor = depth > 0.5 ? "#2a1848" : "#180c28";
   const litColor = "#ffd170";
   const offColor = "#0a0816";
   const neon = "#ff4aa0";
+  const streetColor = depth > 0.5 ? "#120e22" : "#080618";
+  const skyslabColor = depth > 0.5 ? "#180e28" : "#0a061c";
 
-  // Building count — dense across the whole frame
-  const buildingCount = 14 + Math.floor((1 - depth) * 8);
-
-  type Building = {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    windowCols: number;
-    windowRows: number;
-    windowLit: boolean[];
-  };
-
-  const buildings: Building[] = [];
-  let attempts = 0;
-  while (buildings.length < buildingCount && attempts < buildingCount * 4) {
-    attempts++;
-    const w = 110 + rand() * 200;
-    const x = rand() * (width - w);
-    // Reject if the building trunk sits across the hole's horizontal span
-    const bxMid = x + w / 2;
-    if (Math.abs(bxMid - cx) < holeW * 0.42 && rand() > 0.1) continue;
-
-    const h = height * (0.45 + rand() * 0.55);
-    const y = height - h;
-    const windowCols = 3 + Math.floor(rand() * 3);
-    const windowRows = Math.max(6, Math.floor(h / 42));
-    const windowLit = Array.from(
-      { length: windowCols * windowRows },
-      () => rand() > 0.55,
-    );
-    buildings.push({ x, y, w, h, windowCols, windowRows, windowLit });
-  }
-
-  // Foreground flanking buildings — giant, biased to sides
-  const flankCount = 4 + Math.floor((1 - depth) * 3);
-  const flanks: Building[] = Array.from({ length: flankCount }, (_, i) => {
-    const side = i % 2 === 0 ? -1 : 1;
-    const offset = 320 + rand() * (width * 0.3);
-    const w = 220 + rand() * 180;
-    const x = cx + side * offset - w / 2;
-    const h = height * (0.85 + rand() * 0.3);
-    const windowCols = 3 + Math.floor(rand() * 3);
-    const windowRows = Math.max(10, Math.floor(h / 40));
-    const windowLit = Array.from(
-      { length: windowCols * windowRows },
-      () => rand() > 0.5,
-    );
-    return { x, y: height - h, w, h, windowCols, windowRows, windowLit };
+  // ── Left wall: cluster of buildings with varying heights, forming
+  //    the left side of the V-canyon
+  const leftWallWidth = width * (0.40 - depth * 0.06);
+  const leftBuildingCount = 6 + Math.floor((1 - depth) * 4);
+  const leftBuildings = Array.from({ length: leftBuildingCount }, () => {
+    const w = 80 + rand() * 180;
+    const x = rand() * leftWallWidth;
+    const h = height * (0.35 + rand() * 0.6 + (1 - depth) * 0.1);
+    const windowCols = 2 + Math.floor(rand() * 3);
+    const windowRows = Math.max(5, Math.floor(h / 48));
+    return { x, w, h, windowCols, windowRows, lit: Array.from({ length: windowCols * windowRows }, () => rand() > 0.5) };
   });
 
-  // Overhead neon walkway band across the top
-  const walkwayDepth = height * (0.22 - depth * 0.08);
-  // Street at the bottom
-  const streetDepth = height * (0.16 - depth * 0.04);
+  // ── Right wall
+  const rightWallWidth = width * (0.40 - depth * 0.06);
+  const rightBuildingCount = 6 + Math.floor((1 - depth) * 4);
+  const rightBuildings = Array.from({ length: rightBuildingCount }, () => {
+    const w = 80 + rand() * 180;
+    const x = width - rightWallWidth + rand() * (rightWallWidth - w);
+    const h = height * (0.35 + rand() * 0.6 + (1 - depth) * 0.1);
+    const windowCols = 2 + Math.floor(rand() * 3);
+    const windowRows = Math.max(5, Math.floor(h / 48));
+    return { x, w, h, windowCols, windowRows, lit: Array.from({ length: windowCols * windowRows }, () => rand() > 0.5) };
+  });
 
-  const drawBuilding = (b: Building, idx: number, keyPrefix: string) => {
-    const colW = (b.w - 22) / b.windowCols;
-    const rowH = (b.h - 40) / b.windowRows;
+  // ── Walkway / bridge overhead — a structural span across the top portion
+  const walkwayTop = height * (0.06 + depth * 0.04);
+  const walkwayBottom = walkwayTop + height * (0.12 - depth * 0.03);
+
+  // ── Street gutter at the bottom
+  const streetTop = height * (0.84 + depth * 0.04);
+
+  // ── Antenna / crane / sign jutting into center from building tops
+  const jutCount = 3 + Math.floor((1 - depth) * 3);
+  const juts = Array.from({ length: jutCount }, (_, i) => {
+    const fromLeft = i % 2 === 0;
+    const baseX = fromLeft
+      ? leftWallWidth - 30 + rand() * 60
+      : width - rightWallWidth - 30 + rand() * 60;
+    const tipX = fromLeft ? baseX + 80 + rand() * 200 : baseX - 80 - rand() * 200;
+    const y = walkwayBottom + 30 + rand() * (height * 0.35);
+    return { baseX, tipX, y, w: 5 + rand() * 10 };
+  });
+
+  const drawBuilding = (b: typeof leftBuildings[0], idx: number, prefix: string) => {
+    const colW = (b.w - 16) / b.windowCols;
+    const rowH = (b.h - 30) / b.windowRows;
     return (
-      <g key={`${keyPrefix}-${idx}`}>
-        <rect
-          x={b.x}
-          y={b.y}
-          width={b.w}
-          height={b.h}
-          fill={buildingColor}
-        />
-        <rect
-          x={b.x - 6}
-          y={b.y}
-          width={b.w + 12}
-          height={10}
-          fill={buildingRoofColor}
-        />
-        {b.windowLit.map((lit, i) => {
+      <g key={`${prefix}-${idx}`}>
+        <rect x={b.x} y={height - b.h} width={b.w} height={b.h} fill={buildingColor} />
+        <rect x={b.x - 4} y={height - b.h} width={b.w + 8} height={8} fill={roofColor} />
+        {b.lit.map((lit, i) => {
           const col = i % b.windowCols;
           const row = Math.floor(i / b.windowCols);
-          const wx = b.x + 12 + col * colW;
-          const wy = b.y + 22 + row * rowH;
           return (
             <rect
               key={i}
-              x={wx}
-              y={wy}
-              width={Math.max(1, colW - 6)}
-              height={Math.max(1, rowH - 6)}
+              x={b.x + 8 + col * colW}
+              y={height - b.h + 16 + row * rowH}
+              width={Math.max(1, colW - 5)}
+              height={Math.max(1, rowH - 5)}
               fill={lit ? litColor : offColor}
-              opacity={lit ? 0.94 : 1}
+              opacity={lit ? 0.92 : 1}
             />
           );
         })}
@@ -153,89 +115,112 @@ const buildCityCutout = ({
       preserveAspectRatio="xMidYMid slice"
       style={{ width: "100%", height: "100%", display: "block" }}
     >
-      <defs>
-        <mask id={maskId}>
-          <rect x={0} y={0} width={width} height={height} fill="white" />
-          <rect
-            x={cx - holeW / 2}
-            y={cy - holeH / 2}
-            width={holeW}
-            height={holeH}
-            rx={40}
-            ry={40}
-            fill="black"
-          />
-          <rect
-            x={cx - holeW / 2 - 30}
-            y={cy - holeH / 2 - 30}
-            width={holeW + 60}
-            height={holeH + 60}
-            rx={60}
-            ry={60}
-            fill="black"
-            opacity={0.4}
-          />
-        </mask>
-      </defs>
+      {/* Walkway overhead — NO mask, just a band across the top */}
+      <rect x={0} y={0} width={width} height={walkwayTop} fill={skyslabColor} />
+      <rect x={0} y={walkwayTop} width={width} height={walkwayBottom - walkwayTop} fill={roofColor} opacity={0.7} />
+      {/* Neon strip under walkway */}
+      <rect x={100} y={walkwayBottom - 5} width={width - 200} height={4} fill={neon} opacity={0.95} />
+      <rect x={100} y={walkwayBottom - 5} width={width - 200} height={18} fill={neon} opacity={0.18} />
 
-      <g mask={`url(#${maskId})`}>
-        {/* Overhead sky slab + neon walkway */}
-        <rect x={0} y={0} width={width} height={walkwayDepth * 0.82} fill={skyslabColor} />
-        <rect
-          x={0}
-          y={walkwayDepth * 0.82}
-          width={width}
-          height={walkwayDepth * 0.12}
-          fill={buildingRoofColor}
-        />
-        <rect
-          x={60}
-          y={walkwayDepth * 0.95}
-          width={width - 120}
-          height={5}
-          fill={neon}
-          opacity={0.95}
-        />
-        <rect
-          x={60}
-          y={walkwayDepth * 0.95}
-          width={width - 120}
-          height={22}
-          fill={neon}
-          opacity={0.18}
-        />
+      {/* But the walkway should NOT cover the center canyon — clear the middle */}
+      <rect
+        x={leftWallWidth}
+        y={0}
+        width={width - leftWallWidth - rightWallWidth}
+        height={walkwayBottom}
+        fill="transparent"
+      />
 
-        {/* Street gutter */}
-        <rect
-          x={0}
-          y={height - streetDepth}
-          width={width}
-          height={streetDepth}
-          fill={streetColor}
-        />
-        <rect
-          x={0}
-          y={height - streetDepth - 5}
-          width={width}
-          height={5}
-          fill="#2a1a3a"
-        />
+      {/* Street gutter */}
+      <rect x={0} y={streetTop} width={width} height={height - streetTop} fill={streetColor} />
+      <rect x={0} y={streetTop - 4} width={width} height={4} fill="#2a1a3a" />
 
-        {/* Background buildings — full-width distribution */}
-        {buildings.map((b, i) => drawBuilding(b, i, "bg"))}
+      {/* Left building wall */}
+      {leftBuildings.map((b, i) => drawBuilding(b, i, "lb"))}
 
-        {/* Foreground flanking buildings — drawn last, dominate sides */}
-        {flanks.map((b, i) => drawBuilding(b, i, "fg"))}
-      </g>
+      {/* Right building wall */}
+      {rightBuildings.map((b, i) => drawBuilding(b, i, "rb"))}
+
+      {/* Structural elements jutting into center — cranes, antennas, signs */}
+      {juts.map((j, i) => (
+        <g key={`jut-${i}`}>
+          <line x1={j.baseX} y1={j.y} x2={j.tipX} y2={j.y - 10 + rand() * 20}
+            stroke={roofColor} strokeWidth={j.w} strokeLinecap="round" />
+          {/* Small neon sign at the tip */}
+          <rect x={j.tipX - 15} y={j.y - 18} width={30} height={12} fill={neon} opacity={0.6} />
+        </g>
+      ))}
     </svg>
   );
 };
 
-// ─── Assemble the kit and produce the scene ─────────────────────
+// ─── Sub-objects: streetlights, cars, telephone wires between plates
+
+import { interpolate } from "remotion";
+
+const Streetlight: React.FC<{ variant: number; seed: number }> = ({ variant }) => {
+  const h = 260 + variant * 40;
+  return (
+    <svg
+      width={80}
+      height={h}
+      viewBox={`-40 ${-h} 80 ${h}`}
+      style={{ position: "absolute", left: -40, top: -h, overflow: "visible" }}
+    >
+      <rect x={-3} y={-h + 30} width={6} height={h - 30} fill="#2a2430" />
+      <rect x={-1} y={-h + 24} width={22} height={4} fill="#2a2430" />
+      <circle cx={20} cy={-h + 30} r={30} fill="#ffc060" opacity={0.18} />
+      <circle cx={20} cy={-h + 30} r={14} fill="#ffd480" opacity={0.6} />
+      <circle cx={20} cy={-h + 30} r={6} fill="#fff5c8" opacity={0.95} />
+    </svg>
+  );
+};
+
+const Car: React.FC<{ variant: number; seed: number }> = ({ variant }) => {
+  const w = 100 + variant * 20;
+  const h = 40 + variant * 8;
+  const bodyColor = ["#8a2020", "#2020a0", "#c0c020", "#20a040"][variant % 4];
+  return (
+    <svg
+      width={w}
+      height={h}
+      viewBox={`${-w / 2} ${-h} ${w} ${h}`}
+      style={{ position: "absolute", left: -w / 2, top: -h, overflow: "visible" }}
+    >
+      <rect x={-w / 2} y={-h} width={w} height={h * 0.65} rx={6} fill={bodyColor} />
+      <rect x={-w / 2 + 8} y={-h * 0.35} width={w - 16} height={h * 0.35} fill={bodyColor} opacity={0.7} />
+      {/* Headlights */}
+      <circle cx={-w / 2 + 10} cy={-h * 0.5} r={6} fill="#ffee80" opacity={0.9} />
+      <circle cx={w / 2 - 10} cy={-h * 0.5} r={5} fill="#ff3020" opacity={0.7} />
+    </svg>
+  );
+};
+
+// Camera swoop: start high (above telephone wires), dive toward the road
+const cityCameraSwoop = (panProgress: number): number => {
+  // Start 300px above center (above wires), swoop down to 200px below (street level)
+  const swoopCurve = panProgress * panProgress; // ease-in: slow start, fast dive
+  return interpolate(swoopCurve, [0, 1], [-300, 200]);
+};
 
 const kit: SceneKit = {
   palette,
   buildPlateCutout: buildCityCutout,
+  subObjects: [
+    {
+      Component: Streetlight,
+      count: 12,
+      xRange: [-600, 600],  // scattered across the street canyon
+      yRange: [-100, 200],  // above and at ground level
+    },
+    {
+      Component: Car,
+      count: 10,
+      xRange: [-400, 400],  // on the road
+      yRange: [250, 400],   // below camera, on the street
+    },
+  ],
+  cameraYOverride: cityCameraSwoop,
 };
 
 export const SceneFPVCityNight = createFPVScene(kit);

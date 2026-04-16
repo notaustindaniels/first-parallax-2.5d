@@ -61,12 +61,29 @@ export type ScenePalette = {
   showStarfield: boolean;
 };
 
+/** Interstitial sub-objects that populate the space between macro plates.
+ *  These are the rapid-speed particles (individual trees, streetlights,
+ *  cars) that sell scale and motion between the big cutout frames. */
+export type SubObjectSpec = {
+  Component: React.FC<{ variant: number; seed: number }>;
+  count: number;
+  xRange: [number, number];
+  yRange: [number, number];
+};
+
 export type SceneKit = {
   palette: ScenePalette;
-  /** Paint the cutout for a plate of given depth.
-   *  MUST leave the center of the plate transparent — that's the hole
-   *  the camera flies through. */
+  /** Paint the cutout for a plate of given depth. Organic framing —
+   *  the center is left empty by the arrangement of the silhouettes,
+   *  not by a geometric mask. */
   buildPlateCutout: PlateCutoutFn;
+  /** Interstitial sub-objects spawned between macro plates. */
+  subObjects?: SubObjectSpec[];
+  /** Per-scene camera Y override for custom swoops (e.g., city dive).
+   *  Receives the same panProgress (0..1) and returns a Y offset in px.
+   *  If omitted, the default linear pan from VERTICAL_PAN_START_Y to
+   *  VERTICAL_PAN_END_Y is used. */
+  cameraYOverride?: (panProgress: number) => number;
 };
 
 export type FPVSceneProps = {
@@ -311,6 +328,79 @@ const PlateView: React.FC<{
   );
 };
 
+// ── Sub-object generation ───────────────────────────────────────
+// Phase 9: interstitial particles that live BETWEEN the macro plates.
+// They are individual divs at specific Z positions inside the same
+// preserve-3d container as the plates. Each wraps via the same
+// treadmill so they loop forever.
+
+type SubObjectInstance = {
+  specIndex: number;
+  x: number;
+  y: number;
+  initialZ: number;
+  variant: number;
+  seed: number;
+};
+
+const makeSubObjects = (
+  masterSeed: number,
+  specs: SubObjectSpec[],
+): SubObjectInstance[] => {
+  const rand = mulberry32(masterSeed + 999);
+  const out: SubObjectInstance[] = [];
+  for (let si = 0; si < specs.length; si++) {
+    const spec = specs[si];
+    for (let i = 0; i < spec.count; i++) {
+      const x = spec.xRange[0] + rand() * (spec.xRange[1] - spec.xRange[0]);
+      const y = spec.yRange[0] + rand() * (spec.yRange[1] - spec.yRange[0]);
+      const initialZ = Z_FAR + rand() * Z_RANGE;
+      out.push({
+        specIndex: si,
+        x,
+        y,
+        initialZ,
+        variant: Math.floor(rand() * 4),
+        seed: Math.floor(rand() * 1_000_000),
+      });
+    }
+  }
+  return out;
+};
+
+const SubObjectView: React.FC<{
+  obj: SubObjectInstance;
+  renderedZ: number;
+  specs: SubObjectSpec[];
+}> = ({ obj, renderedZ, specs }) => {
+  const opacity = computeDepthFade(renderedZ);
+  const blurPx = computeDOFBlur(renderedZ);
+  if (opacity < 0.01) return null;
+
+  const Comp = specs[obj.specIndex].Component;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: `translate3d(${obj.x}px, ${obj.y}px, ${renderedZ}px)`,
+        transformStyle: "preserve-3d",
+        willChange: "transform",
+      }}
+    >
+      <div
+        style={{
+          opacity,
+          filter: blurPx > 0.1 ? `blur(${blurPx.toFixed(1)}px)` : undefined,
+        }}
+      >
+        <Comp variant={obj.variant} seed={obj.seed} />
+      </div>
+    </div>
+  );
+};
+
 // ── The factory ─────────────────────────────────────────────────
 
 export const createFPVScene = (
@@ -327,6 +417,10 @@ export const createFPVScene = (
       () => makePlates(masterSeed),
       [masterSeed],
     );
+    const subObjects = useMemo(
+      () => (kit.subObjects ? makeSubObjects(masterSeed, kit.subObjects) : []),
+      [masterSeed],
+    );
     const cameraZ = computeCameraZ(frame, durationInFrames);
 
     // Drone physics — wobble, bank, buffet (Part 8)
@@ -335,15 +429,17 @@ export const createFPVScene = (
     const buffet = Math.sin((frame / fps) * 7.1) * 5;
     const camBankDeg = -camDriftX * 0.25;
 
-    // Y-axis reveal pan (Part 14)
+    // Y-axis reveal pan (Part 14) — supports per-scene override for swoops
     const effFrame = frame + FRAME_OFFSET;
     const effDuration = durationInFrames + FRAME_OFFSET;
     const panProgress = Math.min(1, effFrame / effDuration);
-    const panY = interpolate(
-      panProgress,
-      [0, 1],
-      [VERTICAL_PAN_START_Y, VERTICAL_PAN_END_Y],
-    );
+    const panY = kit.cameraYOverride
+      ? kit.cameraYOverride(panProgress)
+      : interpolate(
+          panProgress,
+          [0, 1],
+          [VERTICAL_PAN_START_Y, VERTICAL_PAN_END_Y],
+        );
 
     return (
       <AbsoluteFill
@@ -378,20 +474,32 @@ export const createFPVScene = (
                 transformStyle: "preserve-3d",
               }}
             >
+              {/* Macro plates */}
               {plates.map((plate) => (
                 <PlateView
-                  key={plate.id}
+                  key={`plate-${plate.id}`}
                   plate={plate}
                   renderedZ={wrapZ(plate.initialZ, cameraZ)}
                   kit={kit}
                 />
               ))}
+
+              {/* Interstitial sub-objects (Phase 9) — same preserve-3d
+                  context, same Z treadmill, same DOF/fade as plates */}
+              {kit.subObjects &&
+                subObjects.map((obj, idx) => (
+                  <SubObjectView
+                    key={`sub-${idx}`}
+                    obj={obj}
+                    renderedZ={wrapZ(obj.initialZ, cameraZ)}
+                    specs={kit.subObjects!}
+                  />
+                ))}
             </div>
           </div>
         </div>
 
-        {/* Atmospheric haze — hides the far wrap point. Lighter weight
-            than earlier revisions so plate silhouettes still read. */}
+        {/* Atmospheric haze */}
         <AbsoluteFill
           style={{
             background: `radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 45%, ${kit.palette.fogColor} 100%)`,
