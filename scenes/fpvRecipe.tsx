@@ -1,23 +1,20 @@
 /** fpvRecipe.tsx — Cutout-plate FPV drone scene recipe.
  *
- *  ARCHITECTURE (radically different from earlier revisions):
- *  ============================================================
+ *  ARCHITECTURE:
  *  A scene is a stack of 5–7 flat "painted cutout" plates at varying Z.
  *  Each plate is ONE full-viewport SVG cutout — a dense silhouette with a
  *  transparent hole near the center that the camera flies through.
  *
- *  There are no individual assets, no collision tubes, no placement loops.
- *  The scene author's job is to paint six cutouts (one per plate depth),
- *  and that's it.
- *
  *  This is a Disney multiplane camera in CSS 3D. Plates at different Z
  *  values create depth through occlusion and perspective projection.
  *
- *  Scene author's contract:
- *   - provide `kit.buildPlateCutout({plateIndex, plateCount, seed, width, height})`
- *     that returns a React node (typically an <svg>) drawing the silhouette
- *     for a given depth. Near-plates should have thicker borders / smaller
- *     holes; far plates can be sparser.
+ *  --- CRITICAL FIX (Phase 11): Z-NEAR CULL ---
+ *  In CSS 3D, when an element's translateZ approaches the `perspective` value
+ *  of its ancestor, the projection scale → infinity and the browser clips
+ *  geometry unpredictably. Any plate or sub-object whose renderedZ enters
+ *  the NEAR_CULL_ZONE is opacity-faded to zero over a small Z-window
+ *  BEFORE it mathematically crashes the lens. This eliminates the pops
+ *  and tearing that the user correctly identified.
  *
  *  Implements the rules from fpv-drone-parallax.md:
  *   - Part 1   CSS 3D perspective
@@ -25,11 +22,9 @@
  *   - Part 5   Mid-flight start + exponential ramp
  *   - Part 6   Depth fade from the fog
  *   - Part 8   Drone wobble & bank
+ *   - Part 11  Z-near cull (new)
  *   - Part 13  Cinematic depth of field (non-monotonic Z-blur)
  *   - Part 14  Y-axis reveal pan
- *   Replaces Parts 2 (placement), 9 (collision tube), 11 (cutout density
- *   via asset count), 12 (scale discrepancy via CSS scale) with the
- *   cutout-plate architecture described above.
  */
 import React, { useMemo } from "react";
 import {
@@ -42,13 +37,9 @@ import {
 // ── Public types ────────────────────────────────────────────────
 
 export type PlateCutoutProps = {
-  /** 0 = foreground (thickest borders, smallest hole), plateCount-1 = deepest. */
   plateIndex: number;
-  /** Total number of plates in the tunnel. */
   plateCount: number;
-  /** Deterministic seed unique to this plate. */
   seed: number;
-  /** Viewport dimensions in pixels (nominal 1920×1080). */
   width: number;
   height: number;
 };
@@ -61,9 +52,6 @@ export type ScenePalette = {
   showStarfield: boolean;
 };
 
-/** Interstitial sub-objects that populate the space between macro plates.
- *  These are the rapid-speed particles (individual trees, streetlights,
- *  cars) that sell scale and motion between the big cutout frames. */
 export type SubObjectSpec = {
   Component: React.FC<{ variant: number; seed: number }>;
   count: number;
@@ -73,17 +61,16 @@ export type SubObjectSpec = {
 
 export type SceneKit = {
   palette: ScenePalette;
-  /** Paint the cutout for a plate of given depth. Organic framing —
-   *  the center is left empty by the arrangement of the silhouettes,
-   *  not by a geometric mask. */
   buildPlateCutout: PlateCutoutFn;
-  /** Interstitial sub-objects spawned between macro plates. */
   subObjects?: SubObjectSpec[];
-  /** Per-scene camera Y override for custom swoops (e.g., city dive).
-   *  Receives the same panProgress (0..1) and returns a Y offset in px.
-   *  If omitted, the default linear pan from VERTICAL_PAN_START_Y to
-   *  VERTICAL_PAN_END_Y is used. */
   cameraYOverride?: (panProgress: number) => number;
+  /** Optional Z-offset applied to every plate and sub-object. Used by the
+   *  portal transition to park the city scene deep behind the forest
+   *  without touching the shared treadmill math. */
+  zOffset?: number;
+  /** Disable the plate wrap-around treadmill. Used by the portal transition
+   *  so the city doesn't cycle — it just sits there waiting to be revealed. */
+  disableWrap?: boolean;
 };
 
 export type FPVSceneProps = {
@@ -92,14 +79,27 @@ export type FPVSceneProps = {
   [key: string]: unknown;
 };
 
-// ── Constants (shared across every scene) ──────────────────────
+// ── Constants ───────────────────────────────────────────────────
 
 const PLATE_COUNT = 6;
 const PLATE_Z_SPACING = 2000;
-const Z_RANGE = PLATE_COUNT * PLATE_Z_SPACING; // 12000
-// Z_NEAR must stay strictly < PERSPECTIVE_PX or plates go behind the camera.
+const Z_RANGE = PLATE_COUNT * PLATE_Z_SPACING;
 const Z_NEAR = 700;
-const Z_FAR = Z_NEAR - Z_RANGE; // -11300
+const Z_FAR = Z_NEAR - Z_RANGE;
+
+// Perspective — Part 1
+const PERSPECTIVE_PX = 1200;
+
+// Z-near cull — Phase 11 fix
+// The cull zone starts where objects begin to bloat uncomfortably (~40%
+// of perspective away from camera) and fully fades by the time they'd
+// mathematically intersect the lens (~17% of perspective away).
+// At Z = NEAR_CULL_START (480), projection scale ≈ 1200/(1200-480) = 1.67x
+// At Z = NEAR_CULL_END   (900), projection scale ≈ 1200/(1200-900) = 4.00x
+// So we fade from "zoomed but sharp" to "gone" across a 420px window
+// BEFORE the browser's near-plane kicks in.
+const NEAR_CULL_START = 480;
+const NEAR_CULL_END = 900;
 
 // Camera ramp — Part 5
 const FRAME_OFFSET = 60;
@@ -112,8 +112,6 @@ const FAR_FADE_START = Z_FAR + 500;
 const FAR_FADE_END = Z_FAR + 4000;
 
 // Cinematic DOF — Part 13
-// Non-monotonic blur: slight atmospheric haze at far, razor sharp in the
-// midground focal plane, heavy bokeh for plates past the lens.
 const FOCUS_Z = -2500;
 const FAR_ATMO_BLUR = 4;
 const NEAR_BLUR_MAX = 15;
@@ -122,15 +120,8 @@ const NEAR_BLUR_MAX = 15;
 const VERTICAL_PAN_START_Y = -180;
 const VERTICAL_PAN_END_Y = 120;
 
-// SVG drawing coordinate system for plate cutouts. The SVG uses this
-// viewBox; the outer div is much larger (300vw × 300vh) so perspective
-// can scale plates from tiny-far-rings up to frame-engulfing-walls
-// purely via translateZ.
 const NOMINAL_WIDTH = 1920;
 const NOMINAL_HEIGHT = 1080;
-
-// Perspective — Part 1
-const PERSPECTIVE_PX = 1000;
 
 // ── Deterministic PRNG ──────────────────────────────────────────
 
@@ -159,7 +150,7 @@ const makePlates = (masterSeed: number): Plate[] => {
   const rand = mulberry32(masterSeed);
   const plates: Plate[] = [];
   for (let i = 0; i < PLATE_COUNT; i++) {
-    const initialZ = -500 - i * PLATE_Z_SPACING; // -500, -2500, -4500, -6500, -8500, -10500
+    const initialZ = -500 - i * PLATE_Z_SPACING;
     plates.push({
       id: i,
       initialZ,
@@ -197,35 +188,13 @@ export const computeCameraVelocity = (
   return BASE_SPEED + rampSlope;
 };
 
-export const debugCameraTrace = (durationInFrames: number) => ({
-  f0: {
-    z: computeCameraZ(0, durationInFrames),
-    v: computeCameraVelocity(0, durationInFrames),
-  },
-  fMid: {
-    z: computeCameraZ(Math.floor(durationInFrames / 2), durationInFrames),
-    v: computeCameraVelocity(
-      Math.floor(durationInFrames / 2),
-      durationInFrames,
-    ),
-  },
-  fEnd: {
-    z: computeCameraZ(durationInFrames - 1, durationInFrames),
-    v: computeCameraVelocity(durationInFrames - 1, durationInFrames),
-  },
-});
-
 const wrapZ = (initialZ: number, cameraZ: number): number => {
   const raw = initialZ + cameraZ - Z_FAR;
   return Z_FAR + (((raw % Z_RANGE) + Z_RANGE) % Z_RANGE);
 };
 
-// ── DOF & fade ─────────────────────────────────────────────────
+// ── DOF, fade, and cull ────────────────────────────────────────
 
-// Part 13 — non-monotonic Z-blur:
-//   far plates:   atmospheric haze (4px)
-//   focus plane:  0px
-//   near plates:  heavy bokeh (15px)
 const computeDOFBlur = (renderedZ: number): number => {
   const atmo = interpolate(
     renderedZ,
@@ -242,14 +211,23 @@ const computeDOFBlur = (renderedZ: number): number => {
   return Math.max(atmo, near);
 };
 
-// Part 6 — plates emerge from the fog at the far end of the tunnel
 const computeDepthFade = (renderedZ: number): number =>
   interpolate(renderedZ, [FAR_FADE_START, FAR_FADE_END], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
   });
 
-// ── Starfield (optional, for scenes with a visible sky) ────────
+/** Phase 11: Z-near cull.
+ *  Returns an opacity multiplier that rapidly fades an object as it
+ *  approaches the camera's near plane. This runs BEFORE CSS would
+ *  clip the geometry, eliminating the "pop-through" artifacts. */
+const computeNearCull = (renderedZ: number): number =>
+  interpolate(renderedZ, [NEAR_CULL_START, NEAR_CULL_END], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+// ── Starfield ──────────────────────────────────────────────────
 
 const Starfield: React.FC<{ frame: number; fps: number }> = ({
   frame,
@@ -286,14 +264,13 @@ const PlateView: React.FC<{
   renderedZ: number;
   kit: SceneKit;
 }> = ({ plate, renderedZ, kit }) => {
-  const opacity = computeDepthFade(renderedZ);
+  const fadeOpacity = computeDepthFade(renderedZ);
+  const cullOpacity = computeNearCull(renderedZ);
+  const opacity = fadeOpacity * cullOpacity;
   const blurPx = computeDOFBlur(renderedZ);
 
-  // Each plate is a 300vw × 300vh div offset so that the viewport sits
-  // at its dead center. At translateZ(0) it already overflows the frame
-  // massively (forced vignette); at deep negative Z it shrinks via
-  // perspective projection into a small "ring" framing the static sky.
-  // There is no CSS `scale()` here — perspective alone does the work.
+  if (opacity < 0.005) return null;
+
   return (
     <div
       style={{
@@ -329,10 +306,6 @@ const PlateView: React.FC<{
 };
 
 // ── Sub-object generation ───────────────────────────────────────
-// Phase 9: interstitial particles that live BETWEEN the macro plates.
-// They are individual divs at specific Z positions inside the same
-// preserve-3d container as the plates. Each wraps via the same
-// treadmill so they loop forever.
 
 type SubObjectInstance = {
   specIndex: number;
@@ -373,7 +346,9 @@ const SubObjectView: React.FC<{
   renderedZ: number;
   specs: SubObjectSpec[];
 }> = ({ obj, renderedZ, specs }) => {
-  const opacity = computeDepthFade(renderedZ);
+  const fadeOpacity = computeDepthFade(renderedZ);
+  const cullOpacity = computeNearCull(renderedZ);
+  const opacity = fadeOpacity * cullOpacity;
   const blurPx = computeDOFBlur(renderedZ);
   if (opacity < 0.01) return null;
 
@@ -422,14 +397,14 @@ export const createFPVScene = (
       [masterSeed],
     );
     const cameraZ = computeCameraZ(frame, durationInFrames);
+    const zOffset = kit.zOffset ?? 0;
 
-    // Drone physics — wobble, bank, buffet (Part 8)
+    // Drone physics
     const camDriftX = Math.sin((frame / fps) * 1.2) * 35;
     const camDriftY = Math.cos((frame / fps) * 1.5) * 22;
     const buffet = Math.sin((frame / fps) * 7.1) * 5;
     const camBankDeg = -camDriftX * 0.25;
 
-    // Y-axis reveal pan (Part 14) — supports per-scene override for swoops
     const effFrame = frame + FRAME_OFFSET;
     const effDuration = durationInFrames + FRAME_OFFSET;
     const panProgress = Math.min(1, effFrame / effDuration);
@@ -474,32 +449,38 @@ export const createFPVScene = (
                 transformStyle: "preserve-3d",
               }}
             >
-              {/* Macro plates */}
-              {plates.map((plate) => (
-                <PlateView
-                  key={`plate-${plate.id}`}
-                  plate={plate}
-                  renderedZ={wrapZ(plate.initialZ, cameraZ)}
-                  kit={kit}
-                />
-              ))}
-
-              {/* Interstitial sub-objects (Phase 9) — same preserve-3d
-                  context, same Z treadmill, same DOF/fade as plates */}
-              {kit.subObjects &&
-                subObjects.map((obj, idx) => (
-                  <SubObjectView
-                    key={`sub-${idx}`}
-                    obj={obj}
-                    renderedZ={wrapZ(obj.initialZ, cameraZ)}
-                    specs={kit.subObjects!}
+              {plates.map((plate) => {
+                const renderedZ = kit.disableWrap
+                  ? plate.initialZ + cameraZ + zOffset
+                  : wrapZ(plate.initialZ, cameraZ) + zOffset;
+                return (
+                  <PlateView
+                    key={`plate-${plate.id}`}
+                    plate={plate}
+                    renderedZ={renderedZ}
+                    kit={kit}
                   />
-                ))}
+                );
+              })}
+
+              {kit.subObjects &&
+                subObjects.map((obj, idx) => {
+                  const renderedZ = kit.disableWrap
+                    ? obj.initialZ + cameraZ + zOffset
+                    : wrapZ(obj.initialZ, cameraZ) + zOffset;
+                  return (
+                    <SubObjectView
+                      key={`sub-${idx}`}
+                      obj={obj}
+                      renderedZ={renderedZ}
+                      specs={kit.subObjects!}
+                    />
+                  );
+                })}
             </div>
           </div>
         </div>
 
-        {/* Atmospheric haze */}
         <AbsoluteFill
           style={{
             background: `radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 45%, ${kit.palette.fogColor} 100%)`,
@@ -507,7 +488,6 @@ export const createFPVScene = (
           }}
         />
 
-        {/* Vignette */}
         <AbsoluteFill
           style={{
             background:
@@ -522,23 +502,35 @@ export const createFPVScene = (
   return FPVScene;
 };
 
-// ── Helper: build a standard "edge-framed" cutout ──────────────
+// ── Helper ──────────────────────────────────────────────────────
 
-/** Compute normalized depth for a plate.
- *  Returns 0 for the foreground plate (thickest borders, smallest hole)
- *  and 1 for the deepest plate (sparsest, biggest hole).
- */
 export const plateDepth = (plateIndex: number, plateCount: number): number =>
   plateCount <= 1 ? 0 : plateIndex / (plateCount - 1);
 
-/** Compute the size of the transparent central "flight hole" for a plate.
- *  Foreground plates get a small tight hole; deep plates get a large hole.
- */
 export const plateHoleSize = (
   depth: number,
   width: number,
   height: number,
 ): { w: number; h: number } => ({
-  w: width * (0.22 + depth * 0.28),  // 22% → 50% of viewport width
-  h: height * (0.20 + depth * 0.30), // 20% → 50% of viewport height
+  w: width * (0.22 + depth * 0.28),
+  h: height * (0.20 + depth * 0.30),
 });
+
+// ── Shared constants for the portal transition ─────────────────
+
+export const FPV_CONSTANTS = {
+  PLATE_COUNT,
+  PLATE_Z_SPACING,
+  Z_RANGE,
+  Z_NEAR,
+  Z_FAR,
+  PERSPECTIVE_PX,
+  NEAR_CULL_START,
+  NEAR_CULL_END,
+  FRAME_OFFSET,
+  BASE_SPEED,
+  RAMP_TOTAL,
+  EASE_EXPONENT,
+  NOMINAL_WIDTH,
+  NOMINAL_HEIGHT,
+};
