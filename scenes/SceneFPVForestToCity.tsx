@@ -1,37 +1,37 @@
-/** SceneFPVForestToCity — Portal zoom-through transition.
+/** SceneFPVForestToCity — Masked-frame portal transition.
  *
- *  Phase 11: total rewrite per user feedback.
- *  - NO whip pan, NO horizontal slam, NO flash blackout.
- *  - Pure forward Z-momentum through an organic hole in a foliage wall.
+ *  MODEL (corrected per reference):
+ *  A foreground "portal-frame" (foliage wall with a single organic hole)
+ *  rushes toward the camera. Its border quickly exceeds the viewport;
+ *  the hole grows to fill the frame; we emerge into the city. Heavy
+ *  motion blur on the foliage sells the punch-through moment. No whip
+ *  pan, no cut — pure forward Z-momentum.
  *
- *  THREE-LAYER ARCHITECTURE (back → front):
+ *  LAYERS (back → front):
+ *   CITY        always full-size, 0 opacity → full through the punch
+ *   FOREST      full at start, fades out during the punch
+ *   KEYHOLE     small organic peek of the city before punch begins
+ *   PORTAL      engulfing foliage wall with hole, rushes at camera
+ *   RIM FLASH   subtle bloom at punch moment
  *
- *  1. CITY LAYER  — always rendering underneath. Its drone-flight is
- *                    already in progress, so when we reveal it, it has
- *                    motion and depth. We hold it at slightly reduced
- *                    opacity + mild blur until the punch moment to sell
- *                    the "it's far away, seen through a hole" feeling.
+ *  TIMING (fractions of transition duration):
+ *   0%–55%  forest flythrough, small keyhole peek of city visible
+ *   55%–78% portal appears large and rushes at camera; forest + keyhole
+ *           fade out; city fades in underneath
+ *   78%–86% portal engulfs the frame, enters near-cull zone
+ *   86%–92% portal dissolves, city fully revealed
+ *   92%–100% pure city
  *
- *  2. FOREST LAYER — the forest flythrough. Fades out ONLY in the final
- *                    portion (frame > 80%) so the portal-plate approach
- *                    is naturally framed by real forest around it.
- *
- *  3. PORTAL PLATE — a DEDICATED CSS-3D element sitting in its own
- *                    perspective context, overlaid on top of both
- *                    layers. It's a dense foliage wall with a single
- *                    organic hole dead-center. Its translateZ advances
- *                    deterministically from -10000 (far, tiny, centered
- *                    showing a portal-shaped peek of the forest/city)
- *                    all the way past the camera (Z=900+). As the
- *                    portal's translateZ crosses the near-cull zone,
- *                    it fades out — the same way every other plate
- *                    does — and we're through.
- *
- *  The visual effect: the viewer sees the forest around them, with a
- *  distant peek of "something else" through a hole in a leafy wall up
- *  ahead. The hole grows and grows (because the wall is approaching)
- *  until it consumes the entire frame — and as the leaves of the wall
- *  blow past the lens, the city is already there.
+ *  FIXES from v1:
+ *   - Removed `transform: scale()` on the city AbsoluteFill (was
+ *     rendering the city as a shrunken centered rectangle).
+ *   - Removed the persistent blur on the city layer.
+ *   - Portal plate STARTS LARGE (Z=-2000 → ~0.375x scale), so the
+ *     300vw plate already fills the frame from the first punch frame.
+ *   - Forest/city child scenes get a 2× inner duration so their own
+ *     camera ramps haven't raced past all plates by reveal time.
+ *   - Motion blur added via CSS `filter: blur()` keyed to portal
+ *     velocity (peaks during engulf).
  */
 import React, { useMemo } from "react";
 import {
@@ -48,21 +48,17 @@ export type SceneFPVForestToCityProps = {
   [key: string]: unknown;
 };
 
-// Must match fpvRecipe.PERSPECTIVE_PX so the portal plate's scaling
-// behaviour is identical to the rest of the scene geometry.
 const PERSPECTIVE_PX = 1200;
 const NEAR_CULL_START = 480;
 const NEAR_CULL_END = 900;
 
-// Where the portal plate starts (far) and ends (past the camera).
-const PORTAL_Z_START = -10000;
-const PORTAL_Z_END = 1100; // safely past the near-cull
+const PORTAL_Z_START = -2000;
+const PORTAL_Z_END = 1100;
 
-// Timing — fractions of the transition duration
-const PORTAL_APPROACH_START = 0.0;
-const PORTAL_AT_CAMERA = 0.72;   // portal's translateZ = 0 around here
-const PORTAL_PUNCH_THROUGH = 0.82; // portal starts leaving the cull zone
-const PORTAL_GONE = 0.90;         // portal fully faded
+const PUNCH_BEGIN = 0.55;
+const PUNCH_ENGULF = 0.78;
+const PUNCH_PIERCE = 0.86;
+const PUNCH_DONE = 0.92;
 
 const computeNearCullOpacity = (z: number): number =>
   interpolate(z, [NEAR_CULL_START, NEAR_CULL_END], [1, 0], {
@@ -76,52 +72,51 @@ export const SceneFPVForestToCity: React.FC<SceneFPVForestToCityProps> = ({
   const frame = useCurrentFrame();
   const p = frame / durationInFrames;
 
-  // ── Portal plate Z trajectory ─────────────────────────────────
-  // Non-linear: approaches slowly, then accelerates as it gets close
-  // (matching how a real drone sees oncoming obstacles — distant
-  // things hardly seem to move, near things rush past).
-  const portalZEase = Math.pow(
-    interpolate(p, [PORTAL_APPROACH_START, PORTAL_PUNCH_THROUGH], [0, 1], {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-      easing: Easing.bezier(0.4, 0, 0.8, 1), // ease-in: slow then accelerating
-    }),
-    1,
-  );
+  // ── Portal Z trajectory ─────────────────────────────────────────
+  let portalZ: number;
+  if (p < PUNCH_BEGIN) {
+    portalZ = interpolate(p, [0, PUNCH_BEGIN], [-9000, -4000]);
+  } else if (p < PUNCH_PIERCE) {
+    const rushT = (p - PUNCH_BEGIN) / (PUNCH_PIERCE - PUNCH_BEGIN);
+    const eased = Easing.bezier(0.4, 0, 0.85, 1)(rushT);
+    portalZ = interpolate(eased, [0, 1], [PORTAL_Z_START, NEAR_CULL_START - 20]);
+  } else {
+    portalZ = interpolate(
+      p,
+      [PUNCH_PIERCE, 1],
+      [NEAR_CULL_START - 20, PORTAL_Z_END],
+      { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+    );
+  }
 
-  // After PORTAL_PUNCH_THROUGH, the portal is past the cull zone,
-  // so its exact Z doesn't matter visually — we just march it on.
-  const portalZ =
-    p <= PORTAL_PUNCH_THROUGH
-      ? interpolate(portalZEase, [0, 1], [PORTAL_Z_START, NEAR_CULL_START - 50])
-      : interpolate(
-          p,
-          [PORTAL_PUNCH_THROUGH, 1],
-          [NEAR_CULL_START - 50, PORTAL_Z_END],
-          { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
-        );
-
-  // Near-cull opacity for the portal plate itself
-  const portalCullOpacity = computeNearCullOpacity(portalZ);
-
-  // Additional safety fade for when the portal has fully passed
-  const portalTailFade = interpolate(
+  const portalCullOp = computeNearCullOpacity(portalZ);
+  const portalTailFade = interpolate(p, [PUNCH_PIERCE, PUNCH_DONE], [1, 0], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const portalFadeIn = interpolate(
     p,
-    [PORTAL_PUNCH_THROUGH, PORTAL_GONE],
-    [1, 0],
+    [PUNCH_BEGIN - 0.05, PUNCH_BEGIN + 0.02],
+    [0, 1],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
+  );
+  const portalOpacity =
+    p < PUNCH_BEGIN - 0.05
+      ? 0
+      : portalCullOp * portalTailFade * portalFadeIn;
+
+  const portalBlurPx = interpolate(
+    p,
+    [PUNCH_BEGIN, PUNCH_ENGULF - 0.03, PUNCH_ENGULF, PUNCH_PIERCE],
+    [0, 2, 14, 22],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  const portalOpacity = portalCullOpacity * portalTailFade;
-
-  // ── Forest backdrop opacity ───────────────────────────────────
-  // Stay at 1.0 for most of the flight, then fade to 0 as the portal
-  // crosses the camera. The forest's own last-plate fade gives us
-  // some cover, but we also ramp down the whole layer.
+  // ── Layer opacities ─────────────────────────────────────────────
   const forestOpacity = interpolate(
     p,
-    [0, 0.65, 0.85, 0.95],
-    [1, 1, 0.4, 0],
+    [0, PUNCH_BEGIN, PUNCH_ENGULF, PUNCH_PIERCE],
+    [1, 1, 0.5, 0],
     {
       extrapolateLeft: "clamp",
       extrapolateRight: "clamp",
@@ -129,71 +124,86 @@ export const SceneFPVForestToCity: React.FC<SceneFPVForestToCityProps> = ({
     },
   );
 
-  // ── City layer — held "far away" until punch, then snaps to full ─
-  // The city is always rendering beneath; its opacity and focus
-  // ramp as the portal reveals more of it.
   const cityOpacity = interpolate(
     p,
-    [0, 0.4, PORTAL_AT_CAMERA, PORTAL_GONE, 1],
-    [0.25, 0.35, 0.55, 1, 1],
+    [0, PUNCH_BEGIN - 0.05, PUNCH_ENGULF, PUNCH_PIERCE, 1],
+    [0, 0, 0.75, 1, 1],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  // Blur on city layer: reads as "defocused background" until the
-  // portal lets us see it clearly.
-  const cityBlur = interpolate(
+  // ── Early keyhole peek (tiny "portal in the distance" pre-rush) ──
+  const keyholeRadius = interpolate(p, [0, PUNCH_BEGIN], [0.04, 0.09], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+  const keyholeOpacity = interpolate(
     p,
-    [0, 0.4, PORTAL_AT_CAMERA, PORTAL_GONE],
-    [6, 5, 3, 0],
+    [0, 0.05, PUNCH_BEGIN, PUNCH_BEGIN + 0.03],
+    [0, 0.7, 0.7, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  // ── Rim-flash at punch-through ────────────────────────────────
-  // A soft radial brightening right as we pierce the leafy wall,
-  // mimicking the "lens bloom" when going from a dark enclosed
-  // space into an open lit one.
   const rimFlashOpacity = interpolate(
     p,
-    [PORTAL_AT_CAMERA - 0.02, PORTAL_PUNCH_THROUGH, PORTAL_GONE],
-    [0, 0.7, 0],
+    [PUNCH_ENGULF - 0.02, PUNCH_PIERCE, PUNCH_DONE],
+    [0, 0.55, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" },
   );
 
-  // Memoize heavy child scenes
+  // ── Child scene inner durations ────────────────────────────────
+  // 2× so neither scene's internal camera ramp exhausts all plates
+  // before our wrapper is done.
+  const forestInnerDuration = durationInFrames * 2;
+  const cityInnerDuration = durationInFrames * 2;
+
   const cityNode = useMemo(
-    () => <SceneFPVCityNight durationInFrames={durationInFrames} />,
-    [durationInFrames],
+    () => <SceneFPVCityNight durationInFrames={cityInnerDuration} />,
+    [cityInnerDuration],
   );
   const forestNode = useMemo(
-    () => <SceneFPVForest durationInFrames={durationInFrames} />,
-    [durationInFrames],
+    () => <SceneFPVForest durationInFrames={forestInnerDuration} />,
+    [forestInnerDuration],
   );
   const portalSvg = useMemo(() => buildPortalPlate(42, 1920, 1080), []);
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#020306", overflow: "hidden" }}>
-      {/* ─── LAYER 1: City (background) ─────────────────────────── */}
+      {/* ─── LAYER 1: City (always full-size underneath) ─────────── */}
       <AbsoluteFill
-        style={{
-          opacity: cityOpacity,
-          filter: cityBlur > 0.1 ? `blur(${cityBlur.toFixed(1)}px)` : undefined,
-          willChange: "opacity, filter",
-        }}
+        style={{ opacity: cityOpacity, willChange: "opacity" }}
       >
         {cityNode}
       </AbsoluteFill>
 
-      {/* ─── LAYER 2: Forest (midground) ────────────────────────── */}
+      {/* ─── LAYER 2: Forest ─────────────────────────────────────── */}
       <AbsoluteFill
-        style={{
-          opacity: forestOpacity,
-          willChange: "opacity",
-        }}
+        style={{ opacity: forestOpacity, willChange: "opacity" }}
       >
         {forestNode}
       </AbsoluteFill>
 
-      {/* ─── LAYER 3: Portal plate (foreground, in its own 3D space) ── */}
+      {/* ─── LAYER 2.5: Early keyhole peek ──────────────────────── */}
+      {keyholeOpacity > 0.01 && (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "46%",
+            width: `${keyholeRadius * 200}vmin`,
+            height: `${keyholeRadius * 200}vmin`,
+            transform: "translate(-50%, -50%)",
+            borderRadius: "45% 55% 50% 50% / 55% 45% 55% 45%",
+            background:
+              "linear-gradient(180deg, #2a1250 0%, #4a1640 50%, #1a0a28 100%)",
+            opacity: keyholeOpacity,
+            boxShadow: "inset 0 0 40px 10px rgba(4,9,14,0.95)",
+            filter: "blur(2px)",
+            pointerEvents: "none",
+          }}
+        />
+      )}
+
+      {/* ─── LAYER 3: Portal plate (CSS 3D, rushes at camera) ───── */}
       {portalOpacity > 0.005 && (
         <AbsoluteFill
           style={{
@@ -218,8 +228,12 @@ export const SceneFPVForestToCity: React.FC<SceneFPVForestToCityProps> = ({
                 height: "300vh",
                 transform: `translate3d(0px, 0px, ${portalZ.toFixed(1)}px)`,
                 transformStyle: "preserve-3d",
-                willChange: "transform, opacity",
+                willChange: "transform, opacity, filter",
                 opacity: portalOpacity,
+                filter:
+                  portalBlurPx > 0.5
+                    ? `blur(${portalBlurPx.toFixed(1)}px)`
+                    : undefined,
               }}
             >
               {portalSvg}
@@ -228,22 +242,22 @@ export const SceneFPVForestToCity: React.FC<SceneFPVForestToCityProps> = ({
         </AbsoluteFill>
       )}
 
-      {/* ─── Rim-flash overlay ──────────────────────────────────── */}
+      {/* ─── Rim flash ──────────────────────────────────────────── */}
       <AbsoluteFill
         style={{
           background:
-            "radial-gradient(ellipse at 50% 48%, rgba(255,240,220,0.40) 0%, rgba(255,240,220,0) 50%)",
+            "radial-gradient(ellipse at 50% 48%, rgba(255,240,220,0.5) 0%, rgba(255,240,220,0) 50%)",
           opacity: rimFlashOpacity,
-          pointerEvents: "none",
           mixBlendMode: "screen",
+          pointerEvents: "none",
         }}
       />
 
-      {/* ─── Global vignette ────────────────────────────────────── */}
+      {/* ─── Vignette ───────────────────────────────────────────── */}
       <AbsoluteFill
         style={{
           background:
-            "radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0,0,0,0.35) 100%)",
+            "radial-gradient(ellipse at 50% 50%, transparent 65%, rgba(0,0,0,0.18) 100%)",
           pointerEvents: "none",
         }}
       />

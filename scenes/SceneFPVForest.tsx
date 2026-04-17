@@ -302,7 +302,9 @@ export const buildPortalPlate = (
   const cy = height * 0.48;
 
   const samples = 14;
-  const baseR = Math.min(width, height) * 0.18;
+  // Larger hole — ~25% of short axis — reads as a clear window
+  // through the foliage rather than a decorative spot.
+  const baseR = Math.min(width, height) * 0.25;
   const ringPts: Array<[number, number]> = [];
   for (let i = 0; i < samples; i++) {
     const a = (i / samples) * Math.PI * 2;
@@ -358,20 +360,17 @@ export const buildPortalPlate = (
       preserveAspectRatio="xMidYMid slice"
       style={{ width: "100%", height: "100%", display: "block" }}
     >
-      <defs>
-        <radialGradient id="portal-rim" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#1a3050" stopOpacity="0" />
-          <stop offset="70%" stopColor="#162438" stopOpacity="0.3" />
-          <stop offset="100%" stopColor="#040810" stopOpacity="0.85" />
-        </radialGradient>
-      </defs>
-
+      {/* Foliage wall — lightened to #0e1c14 so the silhouette reads
+          against a near-black night sky (was #04090e, invisible on
+          the black backdrop). Outside the hole = solid foliage. */}
       <path
         d={`M 0,0 L ${width},0 L ${width},${height} L 0,${height} Z ${holePath}`}
-        fill="#04090e"
+        fill="#0e1c14"
         fillRule="evenodd"
       />
 
+      {/* Thick branch arms radiating toward the hole — brighter so
+          they're visible as silhouetted branches, not just black. */}
       {branchArms.map((b, i) => (
         <line
           key={`arm-${i}`}
@@ -379,12 +378,14 @@ export const buildPortalPlate = (
           y1={b.oy}
           x2={b.ix}
           y2={b.iy}
-          stroke="#060d10"
+          stroke="#0a1410"
           strokeWidth={b.thickness}
           strokeLinecap="round"
         />
       ))}
 
+      {/* Leaf fringe around the hole — readable dusky green so the
+          organic "hole in foliage" edge sells itself. */}
       {fringeLeaves.map((f, i) => (
         <ellipse
           key={`fringe-${i}`}
@@ -392,12 +393,21 @@ export const buildPortalPlate = (
           cy={f.ly}
           rx={f.lw / 2}
           ry={f.lh / 2}
-          fill="#0a1612"
+          fill="#16281e"
           transform={`rotate(${f.rot} ${f.lx} ${f.ly})`}
         />
       ))}
 
-      <rect x={0} y={0} width={width} height={height} fill="url(#portal-rim)" />
+      {/* Moonlit rim-light around the hole — a thin outline on the
+          hole's perimeter, faintly catching ambient sky light. Sells
+          the "looking through an opening" depth cue. */}
+      <path
+        d={holePath}
+        fill="none"
+        stroke="#2a3f4a"
+        strokeWidth={3}
+        opacity={0.45}
+      />
     </svg>
   );
 };
