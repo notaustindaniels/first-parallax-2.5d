@@ -87,6 +87,17 @@ export type SceneKit = {
 export type FPVSceneProps = {
   durationInFrames: number;
   masterSeed?: number;
+  /** Filter plates/sub-objects by their current renderedZ. Used for
+   *  Z-based splits — the portal transition renders two forest passes:
+   *  one for objects at-or-behind the tree, one for objects in front. */
+  zVisibilityFilter?: (renderedZ: number) => boolean;
+  /** Skip kit.extraLayer. Used on the front-of-tree pass so the portal
+   *  tree isn't rendered twice. */
+  hideExtraLayer?: boolean;
+  /** Skip background gradient, starfield, fog, and vignette. Renders
+   *  just the 3D content on a transparent backdrop — safe to stack
+   *  over another render. */
+  minimal?: boolean;
   [key: string]: unknown;
 };
 
@@ -395,6 +406,9 @@ export const createFPVScene = (
   const FPVScene: React.FC<FPVSceneProps> = ({
     durationInFrames,
     masterSeed = 1337,
+    zVisibilityFilter,
+    hideExtraLayer = false,
+    minimal = false,
   }) => {
     const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
@@ -427,6 +441,88 @@ export const createFPVScene = (
           [VERTICAL_PAN_START_Y, VERTICAL_PAN_END_Y],
         );
 
+    const scene3D = (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          transform: `translate(${camDriftX}px, ${camDriftY + buffet + panY}px) rotate(${camBankDeg}deg)`,
+          transformOrigin: "50% 50%",
+          willChange: "transform",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            perspective: `${PERSPECTIVE_PX}px`,
+            perspectiveOrigin: "50% 50%",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              transformStyle: "preserve-3d",
+            }}
+          >
+            {plates.map((plate) => {
+              const renderedZ = kit.disableWrap
+                ? plate.initialZ + cameraZ + zOffset
+                : wrapZ(plate.initialZ, cameraZ) + zOffset;
+              if (zVisibilityFilter && !zVisibilityFilter(renderedZ)) return null;
+              return (
+                <PlateView
+                  key={`plate-${plate.id}`}
+                  plate={plate}
+                  renderedZ={renderedZ}
+                  kit={kit}
+                />
+              );
+            })}
+
+            {kit.subObjects &&
+              subObjects.map((obj, idx) => {
+                const renderedZ = kit.disableWrap
+                  ? obj.initialZ + cameraZ + zOffset
+                  : wrapZ(obj.initialZ, cameraZ) + zOffset;
+                if (zVisibilityFilter && !zVisibilityFilter(renderedZ)) return null;
+                return (
+                  <SubObjectView
+                    key={`sub-${idx}`}
+                    obj={obj}
+                    renderedZ={renderedZ}
+                    specs={kit.subObjects!}
+                  />
+                );
+              })}
+
+            {/* Hand-authored extra 3D layer (e.g., the portal tree).
+                Rendered inside the same preserve-3d container as the
+                plates and sub-objects, so any translateZ inside it
+                projects through the same perspective as everything
+                else. */}
+            {kit.extraLayer &&
+              !hideExtraLayer &&
+              kit.extraLayer({
+                frame,
+                durationInFrames,
+                cameraZ,
+                fps,
+              })}
+          </div>
+        </div>
+      </div>
+    );
+
+    if (minimal) {
+      return (
+        <AbsoluteFill style={{ background: "transparent", overflow: "hidden" }}>
+          {scene3D}
+        </AbsoluteFill>
+      );
+    }
+
     return (
       <AbsoluteFill
         style={{
@@ -436,74 +532,7 @@ export const createFPVScene = (
       >
         {kit.palette.showStarfield && <Starfield frame={frame} fps={fps} />}
 
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            transform: `translate(${camDriftX}px, ${camDriftY + buffet + panY}px) rotate(${camBankDeg}deg)`,
-            transformOrigin: "50% 50%",
-            willChange: "transform",
-          }}
-        >
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              perspective: `${PERSPECTIVE_PX}px`,
-              perspectiveOrigin: "50% 50%",
-            }}
-          >
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                transformStyle: "preserve-3d",
-              }}
-            >
-              {plates.map((plate) => {
-                const renderedZ = kit.disableWrap
-                  ? plate.initialZ + cameraZ + zOffset
-                  : wrapZ(plate.initialZ, cameraZ) + zOffset;
-                return (
-                  <PlateView
-                    key={`plate-${plate.id}`}
-                    plate={plate}
-                    renderedZ={renderedZ}
-                    kit={kit}
-                  />
-                );
-              })}
-
-              {kit.subObjects &&
-                subObjects.map((obj, idx) => {
-                  const renderedZ = kit.disableWrap
-                    ? obj.initialZ + cameraZ + zOffset
-                    : wrapZ(obj.initialZ, cameraZ) + zOffset;
-                  return (
-                    <SubObjectView
-                      key={`sub-${idx}`}
-                      obj={obj}
-                      renderedZ={renderedZ}
-                      specs={kit.subObjects!}
-                    />
-                  );
-                })}
-
-              {/* Hand-authored extra 3D layer (e.g., the portal tree).
-                  Rendered inside the same preserve-3d container as the
-                  plates and sub-objects, so any translateZ inside it
-                  projects through the same perspective as everything
-                  else. */}
-              {kit.extraLayer &&
-                kit.extraLayer({
-                  frame,
-                  durationInFrames,
-                  cameraZ,
-                  fps,
-                })}
-            </div>
-          </div>
-        </div>
+        {scene3D}
 
         <AbsoluteFill
           style={{

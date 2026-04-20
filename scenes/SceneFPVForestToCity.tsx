@@ -21,6 +21,22 @@
  *    see only the city — at its natural scale, with its camera in
  *    its natural flight. No re-mount, no jump, no scale change.
  *
+ *  Z-SPLIT (fix for "hole visible through near foreground"):
+ *    The forest is rendered TWICE and stacked:
+ *      L1 (masked, behind pass)  — plates & sub-objects with
+ *                                  renderedZ ≤ treeZ, plus the portal
+ *                                  tree (via extraLayer). The mask
+ *                                  cuts the hole; city shows through.
+ *      L2 (unmasked, front pass) — plates & sub-objects with
+ *                                  renderedZ > treeZ only. No bg,
+ *                                  starfield, fog, or tree. Correctly
+ *                                  occludes the hole when near-camera
+ *                                  content passes between the camera
+ *                                  and the portal tree.
+ *    Both passes share the same frame / duration / masterSeed, so
+ *    their independent 3D contexts produce pixel-identical camera
+ *    transforms and object positions.
+ *
  *  DURATION:
  *    City's internal duration = comp duration × 2, so the city's
  *    camera has plenty of flight left when the reveal completes.
@@ -190,6 +206,14 @@ const SceneFPVForestToCityCore: React.FC<TransitionProps> = ({
     [treeZ, camDriftX, camDriftY, buffet, camBankDeg, width, height],
   );
 
+  // Z-based split around the portal tree.
+  //   Behind pass: renderedZ ≤ treeZ  (masked — city shows through hole)
+  //   Front pass:  renderedZ > treeZ  (unmasked, stacked on top — occludes hole)
+  // treeZ is recomputed each frame, so objects correctly migrate
+  // between the two passes as they cross the tree's depth plane.
+  const behindFilter = (renderedZ: number) => renderedZ <= treeZ;
+  const frontFilter = (renderedZ: number) => renderedZ > treeZ;
+
   // Felt punch-through effect: when the hole is about to exceed the
   // viewport (tree's on-screen width > viewport width), briefly bump
   // a blur and flash a rim. Hole width on screen at scale s = 3s * 180
@@ -209,19 +233,22 @@ const SceneFPVForestToCityCore: React.FC<TransitionProps> = ({
     punchFlashOpacity = punchP * 0.35;
   }
 
+  const punchFilter =
+    withPunchEffect && punchBlurPx > 0.05
+      ? `blur(${punchBlurPx.toFixed(2)}px)`
+      : undefined;
+
   return (
     <AbsoluteFill style={{ backgroundColor: "#020306", overflow: "hidden" }}>
-      {/* Bottom layer: city, always rendering, natural scale, its own
-          camera. Duration is 2× comp so it has plenty of flight left
-          when the reveal completes. */}
+      {/* L0 — City, always rendering, natural scale, own flight. */}
       <AbsoluteFill>
         <SceneFPVCityNight durationInFrames={durationInFrames * 2} />
       </AbsoluteFill>
 
-      {/* Top layer: forest, always rendering, masked so its content
-          is hidden through the portal tree's hole. The tree
-          silhouette IS part of the forest (from its extraLayer), so
-          the visible outline around the hole is the actual tree. */}
+      {/* L1 — Behind-tree forest. MASKED so the city shows through
+          the tree's enclosed region. The portal tree silhouette is
+          rendered here (via extraLayer), so the hole's outline IS
+          the actual tree. */}
       <AbsoluteFill
         style={{
           WebkitMaskImage: maskUrl,
@@ -233,14 +260,28 @@ const SceneFPVForestToCityCore: React.FC<TransitionProps> = ({
           WebkitMaskPosition: "0 0",
           maskPosition: "0 0",
           maskMode: "luminance" as const,
-          filter:
-            withPunchEffect && punchBlurPx > 0.05
-              ? `blur(${punchBlurPx.toFixed(2)}px)`
-              : undefined,
+          filter: punchFilter,
           willChange: "mask-image, filter",
         }}
       >
-        <SceneFPVForest durationInFrames={durationInFrames} />
+        <SceneFPVForest
+          durationInFrames={durationInFrames}
+          zVisibilityFilter={behindFilter}
+        />
+      </AbsoluteFill>
+
+      {/* L2 — In-front-of-tree forest. UNMASKED. Transparent backdrop
+          (minimal) so only the near-camera plates and sub-objects
+          draw. These properly occlude the hole whenever they pass
+          between the camera and the portal tree. No background,
+          starfield, fog, or tree re-render here. */}
+      <AbsoluteFill style={{ filter: punchFilter }}>
+        <SceneFPVForest
+          durationInFrames={durationInFrames}
+          zVisibilityFilter={frontFilter}
+          hideExtraLayer
+          minimal
+        />
       </AbsoluteFill>
 
       {/* Optional: rim flash at punch moment — a subtle radial bloom
