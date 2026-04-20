@@ -71,6 +71,17 @@ export type SceneKit = {
   /** Disable the plate wrap-around treadmill. Used by the portal transition
    *  so the city doesn't cycle — it just sits there waiting to be revealed. */
   disableWrap?: boolean;
+  /** Extra 3D elements to render inside the scene's preserve-3d container.
+   *  Receives the animated context (frame, duration, cameraZ) so the
+   *  extra layer can compute its own Z trajectory and stay in lockstep
+   *  with the main camera. Used to inject hand-authored foreground
+   *  elements like the portal tree. */
+  extraLayer?: (ctx: {
+    frame: number;
+    durationInFrames: number;
+    cameraZ: number;
+    fps: number;
+  }) => React.ReactNode;
 };
 
 export type FPVSceneProps = {
@@ -195,7 +206,7 @@ const wrapZ = (initialZ: number, cameraZ: number): number => {
 
 // ── DOF, fade, and cull ────────────────────────────────────────
 
-const computeDOFBlur = (renderedZ: number): number => {
+export const computeDOFBlur = (renderedZ: number): number => {
   const atmo = interpolate(
     renderedZ,
     [Z_FAR, FOCUS_Z],
@@ -211,7 +222,7 @@ const computeDOFBlur = (renderedZ: number): number => {
   return Math.max(atmo, near);
 };
 
-const computeDepthFade = (renderedZ: number): number =>
+export const computeDepthFade = (renderedZ: number): number =>
   interpolate(renderedZ, [FAR_FADE_START, FAR_FADE_END], [0, 1], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -221,7 +232,7 @@ const computeDepthFade = (renderedZ: number): number =>
  *  Returns an opacity multiplier that rapidly fades an object as it
  *  approaches the camera's near plane. This runs BEFORE CSS would
  *  clip the geometry, eliminating the "pop-through" artifacts. */
-const computeNearCull = (renderedZ: number): number =>
+export const computeNearCull = (renderedZ: number): number =>
   interpolate(renderedZ, [NEAR_CULL_START, NEAR_CULL_END], [1, 0], {
     extrapolateLeft: "clamp",
     extrapolateRight: "clamp",
@@ -476,6 +487,19 @@ export const createFPVScene = (
                       specs={kit.subObjects!}
                     />
                   );
+                })}
+
+              {/* Hand-authored extra 3D layer (e.g., the portal tree).
+                  Rendered inside the same preserve-3d container as the
+                  plates and sub-objects, so any translateZ inside it
+                  projects through the same perspective as everything
+                  else. */}
+              {kit.extraLayer &&
+                kit.extraLayer({
+                  frame,
+                  durationInFrames,
+                  cameraZ,
+                  fps,
                 })}
             </div>
           </div>

@@ -17,7 +17,157 @@ import {
   createFPVScene,
   plateDepth,
   sceneRng,
+  computeDOFBlur,
+  computeDepthFade,
+  computeNearCull,
 } from "./fpvRecipe";
+import { PortalTreeWithReveal } from "./portalTree";
+
+// Portal tree Z trajectory.
+// `initialZ` is a fixed Z offset; `renderedZ = initialZ + cameraZ`.
+// With cameraZ ranging ~1330→11400 over a 240-frame flight, picking
+// initialZ = -9500 makes the tree start at renderedZ ≈ -8170 (far,
+// small) and end at renderedZ ≈ 1900 (past the camera). The tree
+// crosses Z=0 ("fills the frame at natural scale") around 92% of
+// the way through the clip.
+export const PORTAL_TREE_INITIAL_Z = -9500;
+
+/** Companion foliage clustered around the portal tree. These travel
+ *  with the camera (NO wrap — same trajectory as the portal tree),
+ *  so they give parallax cues that embed the portal in a real place
+ *  in the forest. Some are slightly in front of the portal (they
+ *  pass the camera first), some are at portal depth (they frame
+ *  the tree in the scene), some are behind (they fill the middle
+ *  distance behind the portal).
+ *
+ *  IMPORTANT: positions are chosen so none cover the portal's hole
+ *  at viewport center, and so all either pass well to the sides of
+ *  the camera's flight path or are behind the portal (invisible by
+ *  the time the forest mask has gone fully transparent). */
+type PortalCompanion = {
+  /** Z offset relative to PORTAL_TREE_INITIAL_Z. Positive = closer
+   *  to camera (passes first). Negative = further (passes later). */
+  zOffset: number;
+  /** X offset in viewport pixels from center. */
+  x: number;
+  /** Y offset in viewport pixels from center. */
+  y: number;
+  /** SmallTree variant (0-3, affects size). */
+  variant: number;
+  /** Seed for randomization of branch detail. */
+  seed: number;
+};
+
+const PORTAL_COMPANIONS: PortalCompanion[] = [
+  // Group A — foreground, pass camera before the portal
+  { zOffset: 600, x: -900, y: -50, variant: 2, seed: 8121 },
+  { zOffset: 700, x: 950, y: 40, variant: 3, seed: 8122 },
+  { zOffset: 500, x: -1300, y: 120, variant: 1, seed: 8123 },
+  { zOffset: 450, x: 1250, y: -80, variant: 2, seed: 8124 },
+  // Group B — at portal depth, framing it to the sides
+  { zOffset: 0, x: -700, y: 180, variant: 2, seed: 8125 },
+  { zOffset: 0, x: 650, y: 200, variant: 3, seed: 8126 },
+  { zOffset: 100, x: -450, y: 260, variant: 1, seed: 8127 },
+  { zOffset: -100, x: 500, y: 280, variant: 1, seed: 8128 },
+  // Group C — behind the portal, distance fillers (mostly irrelevant
+  // after portal passes because the forest mask engulfs by then, but
+  // they contribute to the sense of depth during the approach)
+  { zOffset: -1200, x: -250, y: 220, variant: 1, seed: 8129 },
+  { zOffset: -1400, x: 300, y: 200, variant: 2, seed: 8130 },
+  { zOffset: -1800, x: -100, y: 240, variant: 0, seed: 8131 },
+];
+
+/** Builder for an extraLayer that renders the portal tree AND its
+ *  companion foliage in the forest's preserve-3d container. The tree
+ *  and companions all travel with the camera (no wrap), giving the
+ *  portal a sense of place in the forest. */
+export const buildPortalTreeLayer = () => {
+  return ({ cameraZ }: {
+    frame: number;
+    durationInFrames: number;
+    cameraZ: number;
+    fps: number;
+  }): React.ReactNode => {
+    const treeZ = PORTAL_TREE_INITIAL_Z + cameraZ;
+    const treeFadeOpacity = computeDepthFade(treeZ);
+    const treeCullOpacity = computeNearCull(treeZ);
+    const treeOpacity = treeFadeOpacity * treeCullOpacity;
+    const treeBlurPx = computeDOFBlur(treeZ);
+
+    return (
+      <>
+        {/* Companion foliage — scattered at various (x,y,z) offsets
+            around the portal, travelling with the camera at the same
+            rate (no wrap). Gives parallax cues so the viewer feels
+            the portal is embedded in a specific place in the forest
+            rather than floating ahead. */}
+        {PORTAL_COMPANIONS.map((c, idx) => {
+          const companionZ = PORTAL_TREE_INITIAL_Z + c.zOffset + cameraZ;
+          const fadeOpacity = computeDepthFade(companionZ);
+          const cullOpacity = computeNearCull(companionZ);
+          const opacity = fadeOpacity * cullOpacity;
+          const blurPx = computeDOFBlur(companionZ);
+          if (opacity < 0.01) return null;
+          return (
+            <div
+              key={`portal-companion-${idx}`}
+              style={{
+                position: "absolute",
+                left: "50%",
+                top: "50%",
+                transform: `translate3d(${c.x}px, ${c.y}px, ${companionZ.toFixed(1)}px)`,
+                transformStyle: "preserve-3d",
+                willChange: "transform",
+              }}
+            >
+              <div
+                style={{
+                  opacity,
+                  filter:
+                    blurPx > 0.1 ? `blur(${blurPx.toFixed(1)}px)` : undefined,
+                }}
+              >
+                <SmallTree variant={c.variant} seed={c.seed} />
+              </div>
+            </div>
+          );
+        })}
+
+        {/* The portal tree itself — hand-authored silhouette at a
+            fixed Z that travels toward the camera over the scene. */}
+        {treeOpacity >= 0.005 && (
+          <div
+            style={{
+              position: "absolute",
+              left: "-100vw",
+              top: "-100vh",
+              width: "300vw",
+              height: "300vh",
+              transform: `translate3d(0px, 0px, ${treeZ.toFixed(1)}px)`,
+              transformStyle: "preserve-3d",
+              willChange: "transform",
+            }}
+          >
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                opacity: treeOpacity,
+                filter:
+                  treeBlurPx > 0.1
+                    ? `blur(${treeBlurPx.toFixed(1)}px)`
+                    : undefined,
+                willChange: "opacity, filter",
+              }}
+            >
+              <PortalTreeWithReveal />
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+};
 
 const palette = {
   backgroundGradient:
@@ -285,129 +435,8 @@ const kit: SceneKit = {
       yRange: [-100, 300],
     },
   ],
+  extraLayer: buildPortalTreeLayer(),
 };
 
 export const SceneFPVForest = createFPVScene(kit);
 export const forestKit = kit;
-
-/** The portal-plate SVG builder, exported so the transition scene can
- *  render a dedicated portal plate as its own CSS 3D layer. */
-export const buildPortalPlate = (
-  seed: number,
-  width: number,
-  height: number,
-): React.ReactNode => {
-  const rand = sceneRng(seed);
-  const cx = width / 2;
-  const cy = height * 0.48;
-
-  const samples = 14;
-  // Larger hole — ~25% of short axis — reads as a clear window
-  // through the foliage rather than a decorative spot.
-  const baseR = Math.min(width, height) * 0.25;
-  const ringPts: Array<[number, number]> = [];
-  for (let i = 0; i < samples; i++) {
-    const a = (i / samples) * Math.PI * 2;
-    const r = baseR * (0.8 + rand() * 0.45);
-    ringPts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
-  }
-
-  const buildSmoothClosed = (pts: Array<[number, number]>): string => {
-    const mid = (a: [number, number], b: [number, number]): [number, number] => [
-      (a[0] + b[0]) / 2,
-      (a[1] + b[1]) / 2,
-    ];
-    const first = mid(pts[pts.length - 1], pts[0]);
-    let d = `M ${first[0].toFixed(1)},${first[1].toFixed(1)} `;
-    for (let i = 0; i < pts.length; i++) {
-      const curr = pts[i];
-      const next = pts[(i + 1) % pts.length];
-      const m = mid(curr, next);
-      d += `Q ${curr[0].toFixed(1)},${curr[1].toFixed(1)} ${m[0].toFixed(1)},${m[1].toFixed(1)} `;
-    }
-    d += "Z";
-    return d;
-  };
-
-  const holePath = buildSmoothClosed(ringPts);
-
-  const fringeLeaves = Array.from({ length: 22 }, (_, i) => {
-    const a = (i / 22) * Math.PI * 2 + rand() * 0.2;
-    const r = baseR * (1.02 + rand() * 0.25);
-    const lx = cx + Math.cos(a) * r;
-    const ly = cy + Math.sin(a) * r;
-    const rot = (a * 180) / Math.PI + 90 + (rand() - 0.5) * 40;
-    const lw = 30 + rand() * 40;
-    const lh = 60 + rand() * 50;
-    return { lx, ly, rot, lw, lh };
-  });
-
-  const branchArms = Array.from({ length: 5 }, () => {
-    const a = rand() * Math.PI * 2;
-    const outerR = Math.max(width, height) * 0.7;
-    const ox = cx + Math.cos(a) * outerR;
-    const oy = cy + Math.sin(a) * outerR;
-    const innerR = baseR * (1.1 + rand() * 0.4);
-    const ix = cx + Math.cos(a) * innerR;
-    const iy = cy + Math.sin(a) * innerR;
-    const thickness = 24 + rand() * 30;
-    return { ox, oy, ix, iy, thickness };
-  });
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="xMidYMid slice"
-      style={{ width: "100%", height: "100%", display: "block" }}
-    >
-      {/* Foliage wall — lightened to #0e1c14 so the silhouette reads
-          against a near-black night sky (was #04090e, invisible on
-          the black backdrop). Outside the hole = solid foliage. */}
-      <path
-        d={`M 0,0 L ${width},0 L ${width},${height} L 0,${height} Z ${holePath}`}
-        fill="#0e1c14"
-        fillRule="evenodd"
-      />
-
-      {/* Thick branch arms radiating toward the hole — brighter so
-          they're visible as silhouetted branches, not just black. */}
-      {branchArms.map((b, i) => (
-        <line
-          key={`arm-${i}`}
-          x1={b.ox}
-          y1={b.oy}
-          x2={b.ix}
-          y2={b.iy}
-          stroke="#0a1410"
-          strokeWidth={b.thickness}
-          strokeLinecap="round"
-        />
-      ))}
-
-      {/* Leaf fringe around the hole — readable dusky green so the
-          organic "hole in foliage" edge sells itself. */}
-      {fringeLeaves.map((f, i) => (
-        <ellipse
-          key={`fringe-${i}`}
-          cx={f.lx}
-          cy={f.ly}
-          rx={f.lw / 2}
-          ry={f.lh / 2}
-          fill="#16281e"
-          transform={`rotate(${f.rot} ${f.lx} ${f.ly})`}
-        />
-      ))}
-
-      {/* Moonlit rim-light around the hole — a thin outline on the
-          hole's perimeter, faintly catching ambient sky light. Sells
-          the "looking through an opening" depth cue. */}
-      <path
-        d={holePath}
-        fill="none"
-        stroke="#2a3f4a"
-        strokeWidth={3}
-        opacity={0.45}
-      />
-    </svg>
-  );
-};
